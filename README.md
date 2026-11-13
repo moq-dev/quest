@@ -1323,8 +1323,9 @@ however the run ends:
 Each line is one write to a file opened for appending, so concurrent gates
 leave only whole lines; give each agent its own file to tell them apart. Nested
 gates write nothing, since their outermost gate already counts their command.
-An unset or empty variable writes nothing, a relative path is refused, and a
-file the gate cannot open fails it before the command runs. A line it cannot
+An unset or empty variable writes nothing, a relative path or a symlink is
+refused, and a file the gate cannot open fails it before the command runs. A
+new file is readable only by its user. A line it cannot
 write fails the gate too, though a cancelled run keeps its cancelled status.
 Windows refuses the variable for now. The agent's own processes write the
 file, so a record is only as trustworthy as the agent.

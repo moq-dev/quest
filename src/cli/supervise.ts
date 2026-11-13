@@ -240,6 +240,7 @@ export function kill(group: string): void {
  */
 function signalGroup(group: string, signal: NodeJS.Signals): void {
 	const signalled = new Set<number>();
+	let failure: unknown;
 	for (let fresh = true; fresh;) {
 		fresh = false;
 		for (const pid of members(group)) {
@@ -249,10 +250,12 @@ function signalGroup(group: string, signal: NodeJS.Signals): void {
 			try {
 				process.kill(pid, signal);
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				// Such as EPERM from a process running as another user: still signal the rest.
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") failure ??= error;
 			}
 		}
 	}
+	if (failure) throw failure;
 }
 
 /**
@@ -451,11 +454,8 @@ function contain(
 				// The holder ignores it; every other process runs its own handling.
 				signalGroup(group!, name);
 			} catch (error) {
-				// Such as EPERM from a process running as another user: signal what this process can.
-				process.stderr.write(
-					`quest: cannot signal every process in ${describe.name}, only its command: ${error}\n`,
-				);
-				child.kill(name);
+				// The rest got the signal; one that did not is no reason to wait for the scope to empty.
+				process.stderr.write(`quest: cannot signal every process in ${describe.name}: ${error}\n`);
 				drain.abort();
 			}
 		};
@@ -482,6 +482,11 @@ function contain(
 			if (error.code !== "EPIPE") failure = error;
 		});
 		let text = "";
+		// Every writer closes the report before the command runs, so it ends however the run goes.
+		const reported = new Promise<void>((resolve) => {
+			report.once("close", resolve);
+			report.once("error", () => resolve());
+		});
 		report.setEncoding("utf8");
 		// The shell reports the scope's cgroup, then `started` once the command is in its own.
 		report.on("data", (data: string) => {
@@ -520,6 +525,8 @@ function contain(
 				ended: Date.now(),
 			};
 			try {
+				// An exit can arrive before the report it follows, such as `started` from a short command.
+				await reported;
 				// Descendants that outlive the command are orphans of this run: stop them.
 				if (group) {
 					let counted: unknown;
@@ -551,14 +558,21 @@ function contain(
 					} catch (error) {
 						throw Object.assign(retained(error), { exit });
 					}
-					if (counted) throw counted;
+					if (counted)
+						throw Object.assign(
+							new Error(
+								`cannot read the counters of ${describe.name}: ${counted instanceof Error ? counted.message : counted}`,
+							),
+							{ exit },
+						);
 				}
 				if (failure) throw failure;
 				if (!admitted && !interrupted)
 					throw new Error(
 						`${describe.unsupported}: ${describe.launcher} exited with ${code ?? signal} before the command started`,
 					);
-				if (admitted && !started && !interrupted)
+				// The shell's own failure; one killed before it ran the command reports that signal instead.
+				if (admitted && !started && !interrupted && code === 125)
 					throw new Error(`${describe.unsupported}: the command never entered its cgroup`);
 				resolve(exit);
 			} catch (error) {

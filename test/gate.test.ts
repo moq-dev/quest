@@ -1573,6 +1573,7 @@ describe.skipIf(process.platform === "win32")("the run record", () => {
 		const ran = spun();
 		const [line, ...rest] = lines(file);
 		expect(rest).toEqual([]);
+		expect(statSync(file).mode & 0o777).toBe(0o600);
 		expect(line).toMatchObject({
 			command,
 			directory: process.cwd(),
@@ -1645,6 +1646,11 @@ describe.skipIf(process.platform === "win32")("the run record", () => {
 		await expect(gate(command, { host: ledger() })).rejects.toThrow(/cannot record its run in .*missing/);
 		outermost("record.jsonl");
 		await expect(gate(command, { host: ledger() })).rejects.toThrow("must be an absolute path");
+		const link = join(dir, "link.jsonl");
+		symlinkSync(join(dir, "target.jsonl"), link);
+		outermost(link);
+		await expect(gate(command, { host: ledger() })).rejects.toThrow(/cannot record its run in .*link\.jsonl/);
+		expect(existsSync(join(dir, "target.jsonl"))).toBe(false);
 		expect(existsSync(ran)).toBe(false);
 	});
 

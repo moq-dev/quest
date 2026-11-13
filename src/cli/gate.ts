@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
 	closeSync,
+	constants as fs,
 	linkSync,
 	lstatSync,
 	mkdirSync,
@@ -21,7 +22,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
 import { stubbed } from "./job";
-import { type Exit, questScope, Retained, scopeGroup, startTime, systemdScopes } from "./supervise";
+import { type Exit, questScope, scopeGroup, startTime, systemdScopes } from "./supervise";
 
 /**
  * The part of Bun's process API the group owner needs: Node's `child_process` reports no resource
@@ -848,7 +849,9 @@ function recordFile(env: NodeJS.ProcessEnv): { path: string; fd: number } | unde
 	// The command's shells change directory, so a relative path would scatter one reader's lines.
 	if (!isAbsolute(path)) throw new Error(`${RECORD} must be an absolute path: ${path}`);
 	try {
-		return { path, fd: openSync(path, "a") };
+		// Private to the user, and never through a symlink someone else planted at a shared path.
+		const flags = fs.O_WRONLY | fs.O_APPEND | fs.O_CREAT | fs.O_NOFOLLOW;
+		return { path, fd: openSync(path, flags, 0o600) };
 	} catch (error) {
 		throw new Error(`gate cannot record its run in ${path}: ${message(error)}`);
 	}
@@ -896,7 +899,7 @@ export async function gate(command: string[], options: GateOptions = {}): Promis
 			// The status the CLI exits with for a gate's own failure.
 			status = 1;
 			// A command that ran keeps its measurements even when its scope cannot be confirmed stopped.
-			if (error instanceof Retained) observed.exit ??= error.exit;
+			if (error instanceof Error && "exit" in error) observed.exit ??= error.exit as Exit;
 		}
 		if (record) {
 			const iso = (ms: number) => new Date(ms).toISOString();
