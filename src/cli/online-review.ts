@@ -403,15 +403,29 @@ export async function onlineGate(
 	};
 	// A bot's reviews are its own account's; a named reviewer's body names it under a writer's account, which only a
 	// writer's own review may claim, so no one else can forge its review.
+	// Its own reviews, dismissed ones included, whose threads stay its findings; a pending one is no one else's to see.
 	const ids = new Set<string>();
 	for (const review of pull.reviews) {
-		if (reviewerOf(review) !== reviewer || review.state === "DISMISSED" || review.state === "PENDING") continue;
+		if (reviewerOf(review) !== reviewer || review.state === "PENDING") continue;
 		const author = login(review.author);
 		if (reviewer.endsWith("[bot]") ? author === reviewer : author !== null && (await canPush(author)))
 			ids.add(String(review.id));
 	}
+	const opened = new Set(
+		pull.reviewThreads.flatMap((thread) => {
+			const review = array(object(thread.comments).nodes)[0]?.pullRequestReview;
+			return review ? [String(object(review).id)] : [];
+		}),
+	);
+	// A pass over a head has a body or opens a thread; a reply in an older thread also makes an empty review of the
+	// head without reviewing it, and a dismissed review is withdrawn.
 	const reviews = pull.reviews
-		.filter((review) => ids.has(String(review.id)))
+		.filter(
+			(review) =>
+				ids.has(String(review.id)) &&
+				review.state !== "DISMISSED" &&
+				(String(review.body ?? "").trim() !== "" || opened.has(String(review.id))),
+		)
 		.map((review) => ({
 			commit: review.commit ? string(object(review.commit).oid) : null,
 			at: Date.parse(String(review.submittedAt)),
@@ -435,10 +449,11 @@ export async function onlineGate(
 		open,
 	});
 	if (reviews.some((review) => review.commit === head)) return gate("current", head);
-	// A GitHub App's bot is `<slug>[bot]`; GitHub lists only each check's latest run.
+	// A GitHub App's bot is `<slug>[bot]`; GitHub lists only each check's latest run. GitHub Actions' app runs every
+	// workflow job, so its checks say nothing of a review.
 	const slug = /^(.+)\[bot\]$/.exec(reviewer)?.[1];
 	let running = false;
-	if (slug !== undefined) {
+	if (slug !== undefined && slug !== "github-actions") {
 		for (
 			let path: string | undefined = `/repos/${pr.owner}/${pr.repo}/commits/${head}/check-runs?per_page=100`;
 			path;

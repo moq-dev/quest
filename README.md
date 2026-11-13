@@ -648,7 +648,10 @@ whose reviews then count only from accounts that can push. `quest merge`
 refuses a head until that reviewer has reviewed it, in a review of the head or
 a successful check run of its own GitHub App on it (a re-review that finds
 nothing new may post only the check), or reviewed an earlier head whose diff
-from the base matches. It also refuses while any review thread the reviewer
+from the base matches. A review that only replies in an older thread, or that
+was dismissed, reviews nothing, and a reviewer posting as
+`github-actions[bot]` counts only by its reviews, since that app runs every
+workflow job. It also refuses while any review thread the reviewer
 opened, on any head, is unresolved, or was resolved by an account that cannot
 push, since GitHub lets the PR's author resolve one: fix or refute each finding
 in its thread and resolve it. Findings it lists only in a review body are not

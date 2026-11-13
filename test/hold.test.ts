@@ -997,6 +997,34 @@ describe("merge --land with an online reviewer", () => {
 		expect(pull.writes).not.toEqual([]);
 	});
 
+	test("counts no reply in an older thread as a review of the head", async () => {
+		const pull = declared();
+		// Replying makes an empty review of the head that opens no thread.
+		pull.reviews = [review("1", OLD), review("2", HEAD, bot, "")];
+		pull.diffs = { [HEAD]: "new", [OLD]: "old" };
+		pull.threads = [thread("1", { __typename: "User", login: "maintainer" })];
+		pull.permissions = { maintainer: "admin" };
+		expect(await refused(merge(pull))).toContain("has not reviewed it");
+	});
+
+	test("keeps a dismissed review's unresolved threads open, though the review no longer counts", async () => {
+		const pull = declared();
+		pull.reviews = [{ ...review("1", HEAD), state: "DISMISSED" }];
+		pull.threads = [thread("1")];
+		pull.checkRuns = [run("completed", "success")];
+		expect(await refused(merge(pull))).toContain(`${URL_}#discussion_r1`);
+		pull.threads = [];
+		pull.checkRuns = [];
+		expect(await refused(merge(pull))).toContain("has not reviewed it");
+	});
+
+	test("counts no GitHub Actions check for a reviewer posting as github-actions[bot], since every job is one", async () => {
+		const pull = new FakePull();
+		pull.reviewMd = "---\nonline-reviewer: github-actions[bot]\n---\n";
+		pull.checkRuns = [run("completed", "success", "github-actions")];
+		expect(await refused(merge(pull))).toContain("has not reviewed it");
+	});
+
 	test("a thread it resolved itself is settled", async () => {
 		const pull = declared();
 		pull.reviews = [review("1", HEAD)];
