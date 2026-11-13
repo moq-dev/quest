@@ -1,4 +1,4 @@
-// GitHub-specific landing decisions shared by the CLI and the Worker.
+// GitHub-specific landing decisions.
 // Keep these outside the tracker-independent quest core.
 
 /** GitHub merges these states at once and refuses auto-merge because the PR is clean. */
