@@ -3,8 +3,8 @@
 ## Goal
 
 `quest unblocked --json` routes each XS quest to Sonnet 5.5 high or Opus
-low, each S quest to Opus low or medium, and each M quest to Opus medium
-or high, 50/50. The split is stable per quest,
+low, each S quest to Sonnet 5.5 high or Opus medium, and each M quest to
+Opus medium or high, 50/50. The split is stable per quest,
 and the review efforts in `src/cli/models.ts` stay fixed while it runs. Each `Implementer:` line
 records its arm, iterates stay on the PR's arm, and
 `quest usage` reports cost, rounds, findings, hand-backs, and later
@@ -37,6 +37,11 @@ Decided 2026-11-11 (user, /quest-plan,
   - Rejected: Sonnet medium against Sonnet high, since the same cost
     guide puts Sonnet medium about 7 points below high on its SWE-bench
     Pro subset and 15 below on its internal agentic-coding set; no XS arm
+- Re-armed 2026-11-13 (user, after reading Anthropic's
+  [model guide](https://claude.dev/blog/which-claude-model-should-you-build-with/)):
+  S writes on Sonnet 5.5 high instead of Opus low, so its arms are Sonnet
+  high against Opus medium, the guide's default. Rejected: dropping the S
+  arm; keeping S on Opus low until this reports.
 - Escapes are too rare to separate the arms, about 2% of PRs. Compare
   first-round findings under the fixed review efforts, rounds, hand-backs,
   and cost, and report escapes alongside.

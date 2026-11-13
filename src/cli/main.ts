@@ -1047,7 +1047,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		command
 			.addOption(new Option("--harness <name>", "Agent CLI to run").choices(HARNESSES).makeOptionMandatory())
 			.requiredOption("--model <model>", "Model the agent runs")
-			.requiredOption("--effort <level>", "Reasoning effort the agent runs at")
+			.requiredOption("--effort <level>", "Reasoning effort the agent runs at, never max", effortLevel)
 			.requiredOption(
 				"--permission-mode <mode>",
 				"Claude Code's --permission-mode, or Codex's sandbox mode; the agent cannot prompt",
@@ -1132,7 +1132,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				". A spawn starts a quest on the first entry that can run, as quest unblocked --json lists them. " +
 				"--writer prints the one entry that runs that model on the work instead, for an iterate, which stays " +
 				"on its PR's writer: the size's own entry for the model, else its entry at the nearest size that " +
-				"lists it, the larger on a tie, so an XS iterate on an Opus PR runs Opus at S's effort. A model no " +
+				"lists it, the larger on a tie, so an XS iterate on an Opus PR runs Opus at M's effort. A model no " +
 				"list names is an error. Prints harness, model, and effort per line, tab-separated; --json prints an " +
 				"array of {harness, model, effort} objects.",
 		)
@@ -1232,7 +1232,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				`model that changed it last. Each size ranks its reviewers (harness, model, effort): ${reviewers}. The ` +
 				"first whose model is not avoided reviews, and beside it, on the same head and each in its own session, " +
 				`${SECOND_REVIEWER.harness} ${SECOND_REVIEWER.model} ${SECOND_REVIEWER.effort} for every size, and the shadow: ` +
-				"the pick's model one effort lower (low, medium, high, xhigh, max), skipped when the pick runs at low or an " +
+				"the pick's model one effort lower (low, medium, high, xhigh), skipped when the pick runs at low or an " +
 				"effort off that ladder, so each effort step can be compared with the one below it. The shadow runs on a " +
 				"branch's first run of the pair, then only while it has findings to settle or once the pick changed so it is " +
 				"no longer one step below; its findings are numbered and settled like any reviewer's, its session carries " +
@@ -1325,7 +1325,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			).choices(REVIEW_HARNESSES),
 		)
 		.option("--model <model>", "Model the size's pick, or --harness's reviewer, runs instead")
-		.option("--effort <level>", "Reasoning effort the size's pick, or --harness's reviewer, runs at instead")
+		.option(
+			"--effort <level>",
+			"Reasoning effort the size's pick, or --harness's reviewer, runs at instead, never max",
+			effortLevel,
+		)
 		.option(
 			"--exclude-model <model>",
 			"A model never picked to review it, instead of the PR's latest writer; repeat for each",
@@ -1643,6 +1647,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		warn(error instanceof Error ? error.message : String(error));
 		return 1;
 	}
+}
+
+/**
+ * An agent's effort: any level but `max`, which costs as much as a stronger
+ * model at a lower effort without matching it.
+ */
+function effortLevel(value: string): string {
+	if (value === "max") throw new InvalidArgumentError("max is never run; use a stronger model instead");
+	return nonEmpty(value);
 }
 
 /** An empty path names no directory, so it is a usage error rather than `.`. */

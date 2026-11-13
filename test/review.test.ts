@@ -1136,6 +1136,12 @@ fakes("--base reviews against another branch, fetched first, with that branch's 
 	expect(unknown.stderr).toContain("--base must be <remote>/<branch>");
 });
 
+test("review refuses max effort", async () => {
+	const result = await quest("review", "--harness", "claude", "--model", "opus", "--effort", "max");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain("max is never run");
+});
+
 fakes("claude reviews read-only with the base's instructions, then reports in the schema", async () => {
 	const s = setup("CODEX_THREAD_ID");
 	// The rules travel inside the command's one double-quoted argument.
@@ -1998,7 +2004,7 @@ test("the shadow is the size's pick one effort lower, and none below low", () =>
 		"claude claude-opus-5-5 medium",
 		"claude claude-opus-5-5 high",
 	]);
-	expect(shadowOf({ harness: "claude", model: "m", effort: "max" })!.effort).toBe("xhigh");
+	expect(shadowOf({ harness: "claude", model: "m", effort: "xhigh" })!.effort).toBe("high");
 	// No step below an effort off the ladder is known, so an --effort such as Codex's minimal runs no shadow.
 	expect(shadowOf({ harness: "codex", model: "m", effort: "minimal" })).toBeNull();
 });

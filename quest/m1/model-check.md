@@ -111,6 +111,15 @@ checkpoints and outages to count by hand:
     puts Sonnet 5.5 high level with Opus 5.5 low (87.6% against 87.4%) at
     about the same cost per solved task, and medium about 7 points below
     high on its SWE-bench Pro subset.
+  - Changed again (maintainer, 2026-11-13), on Anthropic's
+    [model guide](https://claude.dev/blog/which-claude-model-should-you-build-with/),
+    which puts scoped coding on Sonnet 5.5 and advises moving up a model
+    rather than past `high`: S writes on Sonnet 5.5 high instead of Opus
+    low, whose S PRs averaged 4.7 review rounds over 6 reviewed; XL writes
+    on Fable 5.2 medium, with Opus xhigh as its fallback, reversing the
+    2026-11-09 rejection; and nothing runs `max`, which `quest agent` and
+    `quest review` refuse. XS stays Sonnet high, since `quest usage` had no
+    Sonnet medium runs to compare. Tally the S and XL cells fresh.
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest
   model of each tier the tables pin. Bump any that are stale, and check that both CLIs
   accept the new ids and the pinned efforts. `--deep` and its strongest-model

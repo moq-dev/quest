@@ -152,11 +152,11 @@ test("a document that is not UTF-8 is an error", () => {
 test("unblocked prints ranked counts and paths, with deterministic JSON and a limit", () => {
 	const tree = Tree.baseline();
 	expect(tree.run("unblocked")).toEqual({ code: 0, stdout: "1\tquest/m0/epic/one.md\n", stderr: "" });
-	const opusLow = '{"harness":"claude","model":"claude-opus-5-5","effort":"low"}';
+	const sonnetHigh = '{"harness":"claude","model":"claude-sonnet-5-5","effort":"high"}';
 	const solMedium = '{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}';
 	expect(tree.run("unblocked", "--json", "--limit", "1")).toEqual({
 		code: 0,
-		stdout: `[{"path":"quest/m0/epic/one.md","dependents":1,"hosts":[],"models":[${opusLow},${solMedium}]}]\n`,
+		stdout: `[{"path":"quest/m0/epic/one.md","dependents":1,"hosts":[],"models":[${sonnetHigh},${solMedium}]}]\n`,
 		stderr: "",
 	});
 	tree.write("quest/m0/epic/two.md", "# [S] Two\n\n## Goal\n\nWork.\n");
@@ -175,11 +175,11 @@ test("unblocked routes a quest with a decision open one size up, and XL stays XL
 			quest.models.map((entry) => entry.effort).join(" "),
 		);
 	const tree = Tree.baseline().append("quest/m0/epic/one.md", "\n## Waiting\n\n- moq-dev/moq: a release.\n");
-	expect(models(tree)).toEqual(["low medium"]);
+	expect(models(tree)).toEqual(["high medium"]);
 	tree.append("quest/m0/epic/one.md", "- Maintainer: pick a name.\n");
 	expect(models(tree)).toEqual(["medium high"]);
 	tree.write("quest/m0/epic/one.md", "# [XL] One\n\n## Goal\n\nWork.\n\n## Waiting\n\n- Maintainer: pick.\n");
-	expect(models(tree)).toEqual(["xhigh"]);
+	expect(models(tree)).toEqual(["medium xhigh"]);
 });
 
 test("models ranks a size's writers, or the one entry that runs a PR's writer", () => {
@@ -190,12 +190,13 @@ test("models ranks a size's writers, or the one entry that runs a PR's writer", 
 		stderr: "",
 	});
 	expect(JSON.parse(tree.run("models", "XL", "--json").stdout)).toEqual([
+		{ harness: "claude", model: "claude-fable-5-2", effort: "medium" },
 		{ harness: "claude", model: "claude-opus-5-5", effort: "xhigh" },
 	]);
 	const writer = (size: string, model: string) => tree.run("models", size, "--writer", model).stdout;
 	expect(writer("M", "gpt-6.1-sol")).toBe("codex\tgpt-6.1-sol\thigh\n");
 	// A writer its size does not list runs at the nearest size that lists it.
-	expect(writer("XS", "claude-opus-5-5")).toBe("claude\tclaude-opus-5-5\tlow\n");
+	expect(writer("XS", "claude-opus-5-5")).toBe("claude\tclaude-opus-5-5\tmedium\n");
 	expect(writer("L", "claude-sonnet-5-5")).toBe("claude\tclaude-sonnet-5-5\thigh\n");
 	expect(writer("XL", "gpt-6.1-sol")).toBe("codex\tgpt-6.1-sol\txhigh\n");
 	const unknown = tree.run("models", "S", "--writer", "unknown");

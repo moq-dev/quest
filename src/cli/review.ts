@@ -1430,8 +1430,8 @@ const seatKey = (seat: SeatId) => `${seat.reviewer}${seat.shadow ? " shadow" : "
 /** Whether two reviewers hold the same seat: the same harness, both the shadow or neither. */
 export const sameSeat = (a: SeatId, b: SeatId) => seatKey(a) === seatKey(b);
 
-/** The efforts the harnesses take, from lowest to highest. */
-const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+/** The efforts a reviewer runs at, from lowest to highest; `quest` never runs `max`. */
+const EFFORTS = ["low", "medium", "high", "xhigh"];
 
 /**
  * The shadow of `routed`, the size's pick: its model one effort lower, or null when no lower effort is known,
