@@ -1574,7 +1574,15 @@ describe.skipIf(process.platform === "win32")("the run record", () => {
 		// command's own count leaves out only its exec and the owner's few processes around it.
 		expect(line.cpuMs).toBeGreaterThanOrEqual(Math.floor(ran.cpuMs));
 		expect(line.cpuMs).toBeLessThan(ran.cpuMs + 1000);
-		expect(line.peakMemory).toBeGreaterThan(0);
+		// A scope's peak needs Linux 5.19 and the memory controller in the slice gated scopes run in.
+		const uid = process.getuid!();
+		const slice = `/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service/background.slice`;
+		const peak =
+			measured === "children" ||
+			(existsSync(join(slice, "memory.peak")) &&
+				readFileSync(join(slice, "cgroup.subtree_control"), "utf8").split(/\s+/).includes("memory"));
+		if (peak) expect(line.peakMemory).toBeGreaterThan(0);
+		else expect(line.peakMemory).toBeNull();
 	});
 
 	test("a nested gate records nothing, and an empty variable is unset", async () => {
@@ -1643,6 +1651,11 @@ describe.skipIf(process.platform === "win32")("the run record", () => {
 			}
 		},
 	);
+
+	test("a process group drains what its command writes to the token", async () => {
+		const command = ["/bin/sh", "-c", "head -c 1048576 /dev/zero >&3; exit 4"];
+		expect((await group(command, process.env, cancellation().cancel)).status).toBe(4);
+	});
 
 	test("a process group measures its command's own usage", async () => {
 		const { command, spun } = spinner(tempDir());

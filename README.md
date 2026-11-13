@@ -1302,20 +1302,24 @@ however the run ends:
 ```
 
 - `started`, `admitted`, and `ended` give the wait and the wall time. `ended` is
-  when the command's own process exited, before the gate stopped what it left
-  behind. A run cancelled before admission has a null `admitted`.
+  when the gate learned that the command's own process exited, within
+  milliseconds, before it stopped what the command left behind. A run cancelled
+  before admission has a null `admitted`.
 - `cpuMs` and `peakMemory` (bytes) are null when the command never ran, and
   `peakMemory` also where the host cannot say. `measured` names what they
   count:
-  - `cgroup`: the command's systemd scope, so every process it started. Peak
-    memory is the scope's `memory.peak`, which includes page cache charged to
-    it and needs Linux 5.19.
+  - `cgroup`: the command's systemd scope. CPU covers every process the command
+    started. Peak memory is the scope's `memory.peak`, which needs Linux 5.19
+    and also counts page cache charged to the scope and the gate's own shell
+    that holds it, about a megabyte.
   - `children`: on macOS, and Linux without a systemd user manager, the
     command's own resource usage, a lower bound: it covers the descendants the
     command waited for, not those the gate kills at the end, such as a leftover
     background server, and its peak memory is the largest single process's.
 - `exit` is the status the gate returns, `cancelled` whether it was cancelled,
-  and `error` the gate's own failure, such as a command that cannot start.
+  and `error` the gate's own failure, such as a missing `systemd-run` or a scope
+  it cannot confirm stopped. A command that cannot be found is not one: it
+  exits 127, as in a shell.
 
 Each line is one write to a file opened for appending, so concurrent gates
 leave only whole lines; give each agent its own file to tell them apart. Nested

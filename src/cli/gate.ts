@@ -21,7 +21,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
 import { stubbed } from "./job";
-import { type Exit, questScope, scopeGroup, startTime, systemdScopes } from "./supervise";
+import { type Exit, questScope, Retained, scopeGroup, startTime, systemdScopes } from "./supervise";
 
 /**
  * The part of Bun's process API the group owner needs: Node's `child_process` reports no resource
@@ -741,9 +741,16 @@ export const group: Owner = (command, env, cancel) =>
 			return reject(error);
 		}
 		const token = child.stdio[TOKEN];
-		// Read only once a cancellation waits for the end; holders' writes are discarded.
-		let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-		let released: Promise<void> | undefined;
+		// Drained from the start, so a holder's writes never fill the pipe; only its end matters.
+		const reader = Bun.file(token).stream().getReader();
+		const released = (async () => {
+			try {
+				while (!(await reader.read()).done);
+			} catch {
+				// A failed read ends the wait as the pipe's end would.
+			}
+		})();
+		let signalled = false;
 		const signal = (name: NodeJS.Signals) => {
 			try {
 				process.kill(-child.pid, name);
@@ -762,17 +769,7 @@ export const group: Owner = (command, env, cancel) =>
 			}
 		};
 		const stop = () => {
-			if (!reader) {
-				const stream = Bun.file(token).stream().getReader();
-				reader = stream;
-				released = (async () => {
-					try {
-						while (!(await stream.read()).done);
-					} catch {
-						// A failed read ends the wait as the pipe's end would.
-					}
-				})();
-			}
+			signalled = true;
 			signal(requested(cancel.signal));
 		};
 		const terminate = () => signal("SIGKILL");
@@ -786,10 +783,10 @@ export const group: Owner = (command, env, cancel) =>
 			const status = child.exitCode ?? 128 + constants.signals[child.signalCode!];
 			const usage = child.resourceUsage();
 			// Every process in the group got the signal, so let each holder finish its own cleanup.
-			if (released) await Promise.race([released, killed]);
+			if (signalled) await Promise.race([released, killed]);
 			cleanup();
 			try {
-				await reader?.cancel();
+				await reader.cancel();
 				// Bun leaves a pipe it handed out open.
 				closeSync(token);
 				// The group outlives its leader while any member remains, so its ID is not reused yet. A
@@ -885,6 +882,8 @@ export async function gate(command: string[], options: GateOptions = {}): Promis
 	const outermost = process.env[ADMITTED] !== "1";
 	const record = outermost ? recordFile(process.env) : undefined;
 	const started = Date.now();
+	// Read now: the command may remove its own directory.
+	const directory = record ? process.cwd() : "";
 	const cancel = interrupts();
 	const observed: Observed = {};
 	try {
@@ -896,13 +895,15 @@ export async function gate(command: string[], options: GateOptions = {}): Promis
 			failure = error;
 			// The status the CLI exits with for a gate's own failure.
 			status = 1;
+			// A command that ran keeps its measurements even when its scope cannot be confirmed stopped.
+			if (error instanceof Retained) observed.exit ??= error.exit;
 		}
 		if (record) {
 			const iso = (ms: number) => new Date(ms).toISOString();
 			const usage = observed.exit?.usage;
 			const line = `${JSON.stringify({
 				command,
-				directory: process.cwd(),
+				directory,
 				started: iso(started),
 				admitted: observed.admitted === undefined ? null : iso(observed.admitted),
 				ended: iso(observed.exit?.ended ?? Date.now()),

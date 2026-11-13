@@ -119,8 +119,13 @@ export interface Scopes {
 	run(unit: string, cwd: string, command: string[], options?: RunOptions): Promise<Exit>;
 }
 
-/** The command may have started and its scope may still hold processes, so its run stays recorded. */
-export class Retained extends Error {}
+/**
+ * The command may have started and its scope may still hold processes, so its run stays recorded.
+ * `exit` is how the command ended, where its holder reported that before the failure.
+ */
+export class Retained extends Error {
+	exit?: Exit;
+}
 
 export const UNSUPPORTED =
 	"quest worktree run needs Linux 5.14 or later with a systemd user manager (systemd 254 or later) and unified cgroup v2";
@@ -249,12 +254,14 @@ function signalGroup(group: string, signal: NodeJS.Signals): void {
 }
 
 /**
- * The scope's CPU time and peak memory, which cover every process it held, as long as the holder
- * keeps it from being removed. `memory.peak` needs Linux 5.19 and the memory controller.
+ * The CPU time of every process that ran in the command's cgroup `inner`, and the peak memory of
+ * its scope `group`, which also holds the holder shell, since no controller is enabled below the
+ * scope. Both last only while the holder keeps the scope from being removed. `memory.peak` needs
+ * Linux 5.19 and the memory controller.
  */
-function counters(group: string): Usage {
-	const usage = /^usage_usec (\d+)$/m.exec(readFileSync(join(group, "cpu.stat"), "utf8"))?.[1];
-	if (usage === undefined) throw new Error(`cannot read the CPU use of ${group}`);
+function counters(group: string, inner: string): Usage {
+	const usage = /^usage_usec (\d+)$/m.exec(readFileSync(join(inner, "cpu.stat"), "utf8"))?.[1];
+	if (usage === undefined) throw new Error(`cannot read the CPU use of ${inner}`);
 	let peakMemory: number | null = null;
 	try {
 		peakMemory = Number(readFileSync(join(group, "memory.peak"), "utf8"));
@@ -480,7 +487,7 @@ function contain(
 					};
 				}
 				try {
-					return { usage: counters(group!) };
+					return { usage: counters(group!, inner!) };
 				} catch (error) {
 					return { error };
 				}
@@ -553,12 +560,21 @@ function contain(
 						await vacated(group);
 						await describe.emptied();
 					} catch (error) {
-						throw new Retained(
+						const retained = new Retained(
 							`cannot confirm that ${describe.name} stopped: ${error instanceof Error ? error.message : error}`,
 						);
+						if (exited)
+							retained.exit = {
+								...exited,
+								usage: counted && "usage" in counted ? counted.usage : undefined,
+							};
+						throw retained;
 					}
 				}
-				if (counted && "error" in counted) throw counted.error;
+				if (counted && "error" in counted) {
+					if (counted.error instanceof Retained && exited) counted.error.exit = exited;
+					throw counted.error;
+				}
 				if (failure) throw failure;
 				if (!admitted && !interrupted)
 					throw new Error(
