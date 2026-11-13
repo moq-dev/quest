@@ -15,8 +15,9 @@ import { tmpdir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 
 const input = resolve(process.argv[2]);
-const expectedVersion =
-	process.argv[3] ?? JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+// The version the build embeds: a release's tag without its `v`, a flake build's commit, or `dev`.
+const expectedVersion = process.argv[3];
+if (!expectedVersion) throw new Error("usage: lifecycle-check.mjs <binary> <expected version>");
 const work = mkdtempSync(join(tmpdir(), "quest lifecycle "));
 const write = (root, path, text) => {
 	mkdirSync(dirname(join(root, path)), { recursive: true });

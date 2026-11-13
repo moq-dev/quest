@@ -6,7 +6,7 @@ import { relative, resolve, sep } from "node:path";
 
 import { Argument, Command, CommanderError, InvalidArgumentError, Option } from "commander";
 
-import { description, version } from "../../package.json";
+import { description } from "../../package.json";
 import {
 	type Doc,
 	type RankedQuest,
@@ -80,6 +80,7 @@ import { statusLines } from "./status";
 import { pullRequestStatus } from "../github/status";
 import { CCUSAGE_MISSING, daysBefore, usage, usageDependencies, usageLines } from "./usage";
 import { waitForActivity, WaitTimeout } from "./wait";
+import { version } from "./version";
 import { Worktrees } from "./worktree";
 import { HOOK_EVENTS, claudeHook } from "./worktree-hook";
 

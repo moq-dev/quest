@@ -41,4 +41,4 @@ jobs:
         run: bun run test
       - run: bun run build
       - name: Verify native setup and removal without symlinks
-        run: bun scripts/lifecycle-check.mjs dist/quest.js
+        run: bun scripts/lifecycle-check.mjs dist/quest.js dev

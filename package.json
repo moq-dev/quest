@@ -1,6 +1,5 @@
 {
 	"name": "quest",
-	"version": "0.2.1",
 	"description": "Versioned Markdown quests: validate plans, find ready work, and name the branches a quest lands on.",
 	"license": "MIT OR Apache-2.0",
 	"author": "Luke Curley",
@@ -16,7 +15,8 @@
 	},
 	"packageManager": "bun@1.4.4",
 	"scripts": {
-		"build": "bun build src/cli/bin.ts --target=bun --banner \"#!/usr/bin/env -S bun --no-env-file\" --outfile dist/quest.js && bun scripts/executable.mjs dist/quest.js",
+		"build": "bun run bundle && bun scripts/executable.mjs dist/quest.js",
+		"bundle": "bun build src/cli/bin.ts --target=bun --banner \"#!/usr/bin/env -S bun --no-env-file\" --outfile dist/quest.js",
 		"compile": "bun build src/cli/bin.ts --compile --no-compile-autoload-dotenv --outfile dist/quest",
 		"quest": "bun src/cli/bin.ts",
 		"check": "tsc && tsc -p src/core && tsc -p src/github && prettier --check .",

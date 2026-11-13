@@ -51,14 +51,29 @@ The package stays `private`; GitHub releases will ship the `quest` binary.
 
 ## Releases
 
-Pushing a `vX.Y.Z` tag that matches `package.json`'s version runs the Release
-workflow. It compiles `quest` with Bun for macOS, Linux, and Windows (arm64 and
-x64), runs the lifecycle check on each binary's native runner, and publishes the
-macOS/Linux tarballs, Windows ZIPs, `SHA256SUMS`, and `quest-installer.sh` to a
-GitHub release. It then checks that mise and the installer (or, on Windows, the
-ZIP archive) install the tag on every platform. A tag with a
-prerelease suffix publishes a prerelease. `just compile` builds a binary for
-this machine; the Bun in the Nix shell is the version releases use.
+The Release workflow cuts every release; no person or agent tags one. Each
+push to `main`, a daily schedule, and a manual run on `main` compare `main`
+with the latest published release, and cut the next one when that range
+changes what ships, as `scripts/release-plan.sh` decides: everything the
+binaries and the flake package build from, every file Release publishes, and
+the workflows that build and check them. Its pull request runs use the same
+predicate to decide whether to build. The next version is greater than every
+`vX.Y.Z` tag: a minor bump (a major one from 1.0) when a commit subject in the
+range has `!` before its colon, a patch bump otherwise.
 
-Do not push release tags or publish GitHub releases from ordinary development
-work; that is a maintainer action after review.
+A run compiles `quest` with Bun for macOS, Linux, and Windows (arm64 and x64),
+each binary embedding its version, and runs the lifecycle and archive install
+checks on each binary's native runner. Only then does it upload the
+macOS/Linux tarballs, Windows ZIPs, `SHA256SUMS`, and `quest-installer.sh` to
+a draft release and publish it, which creates the tag. A run that fails or is
+cancelled needs no recovery: the next one sees the same unreleased range and
+replaces the draft. After publishing, it checks that mise and the installer
+install the release on every platform; a failure there ships its fix as the
+next release.
+
+`package.json` carries no version. A release binary reports its tag in
+`quest --version`, a flake build its commit, and a checkout run from source
+`dev`. `just compile` builds a binary for this machine; the Bun in the Nix
+shell is the version releases use.
+
+Do not push release tags or publish GitHub releases by hand.
