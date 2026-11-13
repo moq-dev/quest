@@ -110,6 +110,13 @@ Check first next run:
   [late signals](/quest/m0/late-signals.md) lands.
 - Whether moq-dev/moq and moq-dev/moq.pro planned the runtime follow-ups
   of moq-dev/quest's 2026-11-11 run PR, and whether their escapes recurred.
+- Once [standing picks](/quest/m0/ask-less/standing-picks.md) widen and
+  [recorded picks](/quest/m0/ask-less/recorded-picks.md) record their
+  class, count escapes separately for standing and maintainer picks, by
+  class, and propose narrowing a class whose escapes rise (maintainer,
+  2026-11-12, [ask less](/quest/m0/ask-less/README.md)). Compare the
+  answers taken as recommended with that epic's baseline, read from
+  `quest messages` on every host.
 
 Baseline from the 2026-11-11 run (PRs updated 2026-11-09 to 11-11; typed
 messages 2026-10-26 to 11-11, classed by one sub-agent, approximate):
