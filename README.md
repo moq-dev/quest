@@ -961,9 +961,9 @@ its PR still waits as the queue dropped it:
   pattern, such as `deploy-*`, fetches the matching tags from GitHub into
   the checkout, pruning those GitHub deleted, so a check that reads them
   runs there as in the queue's build. Each `--fixer-branch` pattern, such
-  as `release`, does the same for branches, as `origin/<branch>`, for a
-  check that diffs against one. The checkout has no remote, so it always
-  gets the base it starts from as `origin/<base>`.
+  as `release`, does the same for GitHub's branches, as `origin/<branch>`,
+  for a check that diffs against one. The checkout has no remote, so it
+  always gets the base it starts from as `origin/<base>`.
 
 Each finished round is recorded in its pick's history, as the host gate
 records its rounds: `fixed` for a fixer commit, `merged` for a clean merge,

@@ -6,7 +6,7 @@ import { isHoldLabel } from "../core";
 import { array, GitHub, type GitHubDependencies, GitHubGraphQLError, object, type ObjectValue, string } from "./github";
 import { type Queued, queueHead } from "../github/merge";
 import { UNREFUSED } from "./hold";
-import { baseRemote, enqueue, type Entry, git, type LandMethod, mergeBase, type RemoteRead } from "./land";
+import { baseRemote, enqueue, type Entry, type LandMethod, mergeBase, type RemoteRead } from "./land";
 import { resolutionSection, type Resolution } from "./land-apply";
 import { checksSection } from "./land-checks";
 import { type Cause, EFFORT_VARIABLE, type FixResult, knownFlaky, parseFixResult, readFixResult } from "./land-fix";
@@ -358,10 +358,7 @@ async function take(
 	if (history(state, number)?.pick !== entry.enabledAt)
 		save(historyPath(state, number), { pick: entry.enabledAt, rounds: [] } satisfies History);
 	const tags = context.tags.map((pattern) => `+refs/tags/${pattern}:refs/tags/${pattern}`);
-	const branches = context.branches.map(
-		(pattern) => `+refs/remotes/origin/${pattern}:refs/remotes/origin/${pattern}`,
-	);
-	// Pruning drops a tag or branch GitHub no longer has, so a check never reads one deleted there.
+	// Pruning drops a tag GitHub no longer has, so a check never reads one deleted there.
 	await context.read(context.root, [
 		"fetch",
 		"--quiet",
@@ -371,7 +368,6 @@ async function take(
 		base.sha,
 		removal.head,
 		...tags,
-		...context.branches.map((pattern) => `+refs/heads/${pattern}:refs/remotes/origin/${pattern}`),
 	]);
 	let log = removal.log;
 	if (conflict) {
@@ -424,6 +420,16 @@ async function take(
 	);
 	log = input;
 
+	const branches = await fixerBranches(context, repository, base.ref);
+	if (branches.length)
+		await context.read(context.root, [
+			"fetch",
+			"--quiet",
+			"--no-tags",
+			baseRemote({ repository }),
+			...branches.map((branch) => branch.sha),
+		]);
+
 	const checkout = mkdtempSync(join(state, "fix-"));
 	try {
 		const packs = prepare(
@@ -431,17 +437,13 @@ async function take(
 			checkout,
 			[
 				`${removal.head}:refs/heads/batch`,
-				`${base.sha}:refs/heads/base`,
 				`${removal.head}:refs/heads/pr-${number}`,
 				...tags,
-				...branches,
+				...branches.map((branch) => `${branch.sha}:refs/remotes/origin/${branch.name}`),
 			],
 			// Start at the base: the agent loads its instructions and tooling only from code already landed.
-			base.sha,
+			base,
 		);
-		// The checkout has no remote: `origin/<base>` is the base the round works on, as checks that diff against it
-		// expect, even where a `--fixer-branch` pattern fetched GitHub's newer one.
-		git(checkout, ["update-ref", `refs/remotes/origin/${base.ref}`, base.sha]);
 		if (!conflict) writeKnownFlaky(state, checkout);
 		const job: WatchJob = {
 			checkout,
@@ -467,6 +469,30 @@ async function take(
 		rmSync(checkout, { recursive: true, force: true });
 		throw error;
 	}
+}
+
+/**
+ * GitHub's branches that a `--fixer-branch` pattern matches, other than the base, which the round pins itself.
+ * Matched here rather than by a fetch refspec, so a pattern naming a branch GitHub no longer has matches nothing.
+ */
+async function fixerBranches(
+	context: FixContext,
+	repository: string,
+	base: string,
+): Promise<{ name: string; sha: string }[]> {
+	if (!context.branches.length) return [];
+	const glob = (pattern: string) =>
+		pattern
+			.split("*")
+			.map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+			.join(".*");
+	const match = new RegExp(`^(?:${context.branches.map(glob).join("|")})$`);
+	const listed = await context.read(context.root, ["ls-remote", "--heads", baseRemote({ repository })]);
+	return listed
+		.split("\n")
+		.map((line) => /^([0-9a-f]{40}|[0-9a-f]{64})\trefs\/heads\/(.+)$/.exec(line))
+		.filter((found) => found !== null && found[2] !== base && match.test(found[2]))
+		.map((found) => ({ name: found![2], sha: found![1] }));
 }
 
 /** End a job: its checkout and its records go, and its output log stays for diagnosis on the host. */

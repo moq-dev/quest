@@ -1005,8 +1005,6 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		const state = tempDir();
 		const root = privateRepository(state);
 		configure(root, { [`url.${repo.hub}/.insteadOf`]: "https://github.com/", ...GIT_SETTINGS });
-		// The branch `--fixer-branch` names, which must exist on GitHub.
-		git(repo.origin, "update-ref", "refs/heads/release", repo.main());
 		const fix = fixer();
 		const context: FixContext = {
 			root,
@@ -1091,8 +1089,10 @@ describe.skipIf(process.platform === "win32")("the watcher's land fixer", () => 
 		git(repo.origin, "tag", "deploy-1", base);
 		git(repo.origin, "tag", "other-1", base);
 		git(context.root, "fetch", "--quiet", repo.origin, `${base}:refs/tags/deploy-0`);
-		// It gets the matching branches as `origin/<branch>`, and the base it builds on as `origin/main`.
+		// It gets the matching branches as `origin/<branch>`, and the base it builds on as `origin/main`. The other
+		// tests run with `release` absent from GitHub, which matches nothing.
 		git(repo.origin, "update-ref", "refs/heads/release", head);
+		git(repo.origin, "update-ref", "refs/heads/release-next", head);
 		fix.round(
 			5,
 			`git tag -l > '${fix.tools}/tags'\ngit for-each-ref --format='%(refname) %(objectname)' refs/remotes > '${fix.tools}/remotes'\n${fixScript("fixed.txt")}`,

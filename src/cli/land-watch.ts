@@ -64,6 +64,7 @@ export interface WatchOptions {
 	fixerEffort: string;
 	/** Patterns of tags fetched from GitHub into each fixer checkout. */
 	fixerTag: string[];
+	/** Patterns of GitHub branches mirrored into each fixer checkout as `origin/<branch>`. */
 	fixerBranch: string[];
 	/** Repositories whose flake input on this repository each pass bumps to this repository's base. */
 	bump: Repository[];

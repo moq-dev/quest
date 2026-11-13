@@ -805,7 +805,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.option(
 			"--fixer-branch <pattern>",
-			"Fetch the branches matching this pattern (repeatable), such as `release`, from GitHub into each fixer checkout as `origin/<branch>`, so checks that diff against them run there as in the queue's build (one named without `*` must exist); the base is always there as `origin/<base>`",
+			"Fetch the branches matching this pattern (repeatable), such as `release`, from GitHub into each fixer checkout as `origin/<branch>`, so checks that diff against them run there as in the queue's build; the base is always there as `origin/<base>`",
 			refPattern("branch", "release"),
 			[] as string[],
 		)
@@ -1668,10 +1668,10 @@ export function gateBoundary(argv: string[]): string[] {
 	return [...argv.slice(0, command), "--", ...argv.slice(command)];
 }
 
-/** Collect a repeatable ref name pattern, such as `deploy-*`, refusing one that could read as an option or escape its namespace. */
+/** Collect a repeatable ref name pattern, such as `deploy-*`, refusing one that could read as an option, escape its namespace, or hold more than the one `*` a refspec allows. */
 function refPattern(kind: string, example: string) {
 	return (value: string, previous: string[]) => {
-		if (!/^[\w.*/-]+$/.test(value) || value.startsWith("-") || value.includes(".."))
+		if (!/^[\w.*/-]+$/.test(value) || value.startsWith("-") || value.includes("..") || value.split("*").length > 2)
 			throw new InvalidArgumentError(`expected a ${kind} name pattern, such as ${example}`);
 		return [...previous, value];
 	};
