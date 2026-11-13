@@ -95,6 +95,7 @@ export function check(docs: Doc[], exists: (path: string) => boolean): Finding[]
 	collisions(found, known, docs);
 	membership(found, known, docs);
 	milestones(found, docs);
+	inversions(found, docs);
 	cycles(found, docs);
 
 	return found.sort(compareFindings);
@@ -337,6 +338,49 @@ export function finishedMilestone(docs: Doc[]): (doc: Doc, entry: Entry) => bool
 		const milestone = byPath.get(target);
 		return milestone !== undefined && !has(milestone, "Required") && !docs.some((d) => holds(target, d.path));
 	};
+}
+
+/**
+ * The milestone README of the root child directory holding `path`, or `null`
+ * for the root README and files directly under the root.
+ */
+function milestoneOf(path: string): string | null {
+	const parts = path.split("/");
+	return parts.length >= 3 ? `${parts[0]}/${parts[1]}/README.md` : null;
+}
+
+/**
+ * A `Required` link must not point to a later milestone. `quest unblocked`
+ * ranks a blocker by its own milestone, so an inverted link stalls the earlier
+ * quest behind all of the later milestone's work. Which side moves is the
+ * maintainer's priority call, so there is no fix. A milestone README cannot
+ * move, since milestones are permanent.
+ */
+function inversions(found: Finding[], docs: Doc[]) {
+	for (const doc of docs) {
+		const from = milestoneOf(doc.path);
+		if (from === null) continue;
+		for (const entry of entries(doc, "Required")) {
+			if (entry.target === null) continue;
+			const target = rooted(entry.target);
+			if (target === null) continue;
+			const to = milestoneOf(target);
+			if (to === null || comparePaths(to, from) <= 0) continue;
+			const [early, late] = [from.split("/")[1], to.split("/")[1]];
+			const name = (path: string) => path.replace(/\/README\.md$/, "");
+			const moves = [
+				permanent(target) ? null : `move ${name(target)} to ${early}`,
+				permanent(doc.path) ? null : `move ${name(doc.path)} to ${late}`,
+			].filter((move) => move !== null);
+			const fix =
+				moves.length > 0 ? `${moves.join(" or ")} with \`quest mv\`, or remove the link` : "remove the link";
+			found.push({
+				path: doc.path,
+				line: entry.line,
+				message: `in milestone ${early}, requires ${target} in later milestone ${late}; ${fix}`,
+			});
+		}
+	}
 }
 
 /**

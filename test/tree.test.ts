@@ -405,12 +405,18 @@ describe("finished milestones", () => {
 		expect(t.ready()).toEqual([]);
 	});
 
-	// moq-dev/moq's m1 lists m0 quests: those blockers keep it open.
+	// A milestone README may list earlier quests: those blockers keep it open.
 	test("a milestone with only blockers left is open", () => {
-		gated()
-			.append("quest/m0/README.md", "\n## Required\n\n- [Other](/quest/m1/other.md)\n")
-			.remove("quest/m0/epic")
-			.write("quest/m1/other.md", "# [S] Other\n\n## Goal\n\nOpen work m0 waits on.\n")
+		tree()
+			.write(
+				"quest/m1/README.md",
+				"# M1\n\n## Goal\n\nThe next milestone.\n\n## Required\n\n- [One](/quest/m0/epic/one.md)\n",
+			)
+			.write("quest/m2/README.md", "# M2\n\n## Goal\n\nLater.\n")
+			.write(
+				"quest/m2/gate.md",
+				"# [S] Gate\n\n## Goal\n\nRuns once m1 finishes.\n\n## Required\n\n- [M1](/quest/m1/README.md)\n",
+			)
 			.accepts();
 	});
 
@@ -813,5 +819,68 @@ describe("scheduled", () => {
 		const t = tree().append("quest/m0/epic/one.md", "\n## Scheduled\n");
 		t.rejects("'## Scheduled' is empty");
 		expect(t.ready()).toEqual(["quest/m0/epic/one.md"]);
+	});
+});
+
+// `quest unblocked` ranks a blocker by its own milestone, so a link to a later
+// one stalls the earlier quest behind all of that milestone's work.
+describe("Required links to a later milestone", () => {
+	const later = () =>
+		tree()
+			.write("quest/m1/README.md", "# M1\n\n## Goal\n\nLater.\n")
+			.write("quest/m1/late.md", "# [S] Late\n\n## Goal\n\nLater work.\n");
+	const REQ = "\n## Required\n\n- [Late](/quest/m1/late.md)\n";
+
+	test("a quest requiring a later quest", () => {
+		expect(later().append("quest/m0/epic/two.md", REQ).findings()).toEqual([
+			"quest/m0/epic/two.md:13: in milestone m0, requires quest/m1/late.md in later milestone m1; move quest/m1/late.md to m0 or move quest/m0/epic/two.md to m1 with `quest mv`, or remove the link",
+		]);
+	});
+
+	test("an epic README requiring a later quest", () => {
+		const findings = later().append("quest/m0/epic/README.md", REQ).findings();
+		expect(findings).toHaveLength(1);
+		expect(findings[0]).toContain("move quest/m1/late.md to m0 or move quest/m0/epic to m1");
+	});
+
+	test("a milestone README offers only moving the other side", () => {
+		const findings = later().append("quest/m0/README.md", REQ).findings();
+		expect(findings).toHaveLength(1);
+		expect(findings[0]).toContain(
+			"in later milestone m1; move quest/m1/late.md to m0 with `quest mv`, or remove the link",
+		);
+	});
+
+	test("a later milestone README offers only moving the requirer", () => {
+		const findings = later()
+			.append("quest/m0/epic/two.md", "\n## Required\n\n- [M1](/quest/m1/README.md)\n")
+			.findings();
+		expect(findings[0]).toContain("move quest/m0/epic/two.md to m1 with `quest mv`, or remove the link");
+	});
+
+	test("m10 follows m9", () => {
+		const t = tree()
+			.write("quest/m9/README.md", "# M9\n\n## Goal\n\nNine.\n")
+			.write("quest/m9/nine.md", "# [S] Nine\n\n## Goal\n\nNine.\n")
+			.write("quest/m10/README.md", "# M10\n\n## Goal\n\nTen.\n")
+			.write("quest/m10/a.md", "# [S] A\n\n## Goal\n\nA.\n\n## Required\n\n- [M9](/quest/m9/README.md)\n");
+		t.accepts();
+		t.write("quest/m10/a.md", "# [S] A\n\n## Goal\n\nA.\n").write(
+			"quest/m9/b.md",
+			"# [S] B\n\n## Goal\n\nB.\n\n## Required\n\n- [A](/quest/m10/a.md)\n",
+		);
+		expect(t.findings()).toEqual([
+			"quest/m9/b.md:9: in milestone m9, requires quest/m10/a.md in later milestone m10; move quest/m10/a.md to m9 or move quest/m9/b.md to m10 with `quest mv`, or remove the link",
+		]);
+	});
+
+	test("earlier and same-milestone links pass", () => {
+		later()
+			.write("quest/m1/other.md", "# [S] Other\n\n## Goal\n\nSame milestone.\n")
+			.append(
+				"quest/m1/late.md",
+				"\n## Required\n\n- [One](/quest/m0/epic/one.md)\n- [Other](/quest/m1/other.md)\n",
+			)
+			.accepts();
 	});
 });
