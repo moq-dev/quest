@@ -123,8 +123,9 @@ export function questInput(lock: ObjectValue, source: Repository): { input: stri
 /**
  * The repositories, other than the source, across every installation whose default branch's `flake.lock`
  * locks the source through exactly one root input. Only the lock is read; nothing is cloned. A repository
- * locking it through several inputs, or whose lock cannot be read, is reported in `output` and skipped. An
- * installation whose token or listing fails is recorded in `failures`, and the others are still searched.
+ * locking it through several inputs, or whose lock cannot be decoded, is reported in `output` and skipped. A failed
+ * request, for one repository's lock or an installation's token or listing, is recorded in `failures`, and
+ * the rest are still searched.
  */
 export async function discoverTargets(
 	source: Repository,
@@ -146,12 +147,21 @@ export async function discoverTargets(
 					const repo = string(row.name);
 					const target = { owner, repo };
 					if (row.archived === true || name(target).toLowerCase() === name(source).toLowerCase()) continue;
-					let found: number;
+					let response: Response;
 					try {
-						const response = await github.request(`/repos/${owner}/${repo}/contents/flake.lock`, {
+						response = await github.request(`/repos/${owner}/${repo}/contents/flake.lock`, {
 							allow: [404],
 						});
-						if (response.status === 404) continue;
+					} catch (error) {
+						// A failed request may be transient, so it leaves discovery incomplete and retried.
+						failures.push(
+							`discovery of ${name(target)}: ${error instanceof Error ? error.message : String(error)}`,
+						);
+						continue;
+					}
+					if (response.status === 404) continue;
+					let found: number;
+					try {
 						const content = string(object(await response.json()).content);
 						found = questInputs(
 							object(JSON.parse(Buffer.from(content, "base64").toString("utf8"))),

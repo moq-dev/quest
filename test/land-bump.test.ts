@@ -684,10 +684,10 @@ describe("discoverTargets", () => {
 			failures,
 		);
 		expect(targets).toEqual([{ owner: "moq-dev", repo: "widget" }]);
-		expect(output).toHaveLength(1);
-		expect(output[0]).toMatch(/^bump skips moq-dev\/locked: its flake.lock cannot be read:/);
-		expect(failures).toHaveLength(1);
+		expect(output).toEqual([]);
+		expect(failures).toHaveLength(2);
 		expect(failures[0]).toMatch(/^discovery in installation 1:/);
+		expect(failures[1]).toMatch(/^discovery of moq-dev\/locked:/);
 	});
 });
 
