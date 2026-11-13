@@ -29,7 +29,7 @@ and `/reflect`):
   - Rejected: forge records only; transcripts through a script each run
 - What gates each run?
   - ✅ A week since the last run, the way
-    [the release cut](/quest/m1/release-cut.md) waits. The decision named a
+    the release cut waited. The decision named a
     `## Waiting` item because quests could not yet be held until a date;
     since `## Scheduled` exists, the run holds the date there (agent,
     2026-11-11).

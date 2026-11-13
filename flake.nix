@@ -75,16 +75,10 @@
                 nixfmt
                 # GNU time, which the gate's cancellation tests put between Bash and their leaf.
                 time
-                # `srt`, which an opencode review runs its commands under, with its seccomp helper on Linux.
-                (callPackage ./nix/sandbox-runtime.nix { })
               ]
               # `flock` (the land daemon's repository lock) and `script` (the tests' terminal), which
-              # self-hosted NixOS runners don't otherwise provide, and the bubblewrap and socat srt runs.
-              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
-                pkgs.util-linux
-                pkgs.bubblewrap
-                pkgs.socat
-              ];
+              # self-hosted NixOS runners don't otherwise provide.
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.util-linux ];
           };
           formatter = pkgs.nixfmt;
           checks = {

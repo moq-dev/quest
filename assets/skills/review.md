@@ -23,7 +23,7 @@ Run no new round when a review already counts for the committed head, as `/quest
 If you judge the change too trivial to review, skip the review instead and record the skip and its reason in `## Review`.
 
 Otherwise, review the committed branch with `quest review --base <remote>/<base>`, in the foreground; a round takes minutes.
-It picks a reviewer other than the model that changed the branch last, at an effort the PR's size sets, with a second reviewer beside it.
+It picks a reviewer other than the model that changed the branch last, at an effort the PR's size sets.
 It reads that model, and off a quest branch the size, from the PR body's `## Models` record: open the draft PR and write the record before the first round, as `Size: M` and `Implementer: Claude Code, claude-opus-5-5, high effort`.
 Pass `--exclude-model` or `--size` only for a PR whose body cannot hold the record.
 Where the repository's root instructions name other reviewers, pass them with `--harness`, `--model`, and `--effort`, which runs that reviewer alone.
@@ -41,7 +41,7 @@ Step back before another patch: state the problem the PR solves without referenc
 Report that comparison, recommending to continue, rethink the approach, merge as is, or drop the PR, and let the user decide.
 Record each design change, including a rethink the user picks, in a PR comment that starts with `Design change:`, and start the next review with `quest review --new`, which restarts the count.
 
-Either reviewer out of quota or logged out is an outage, not a skip: stop reviewing rather than go on with the other alone, keep the PR a draft, hand it back, and report the outage.
+A reviewer out of quota or logged out is an outage, not a skip: stop reviewing, keep the PR a draft, hand it back, and report the outage.
 Its `## Waiting` item names the reviewer, its error, and the check, such as `Codex: out of quota until 2026-11-03 15:00 UTC; check that quest review runs`, with the reset time `quest review` prints when it exits 3 on a usage limit; a logged-out reviewer waits on `Maintainer:`, with the login command `quest review` prints.
 Once the reset passes or the login is restored, the item has cleared: whoever finds it runs `/quest-review` on the PR.
 
