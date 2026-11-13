@@ -133,6 +133,9 @@ Stop and report a PR that makes the same change; one that only touches the same 
 `quest unblocked` ranks the ready quests, and `quest unblocked <path>` prints what blocks one.
 With `--unclaimed`, it skips quests someone holds and lists them on stderr.
 
+Treat expensive work as a defect, not the status quo: when a build, test, checker, or agent workflow costs more CPU, memory, or wall time than it must, add a follow-up quest that makes it cheaper.
+A ready quest that cuts that cost starts at once, ahead of `quest unblocked`'s ranking and any coordinator's turn, and its PR goes first among the PRs to iterate and offer for merge, so no work waits behind a cost already agreed to remove.
+
 Work is taken when it has an open change on the forge, so check before starting;
 these states stay out of the quest file.
 
