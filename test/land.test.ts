@@ -26,7 +26,6 @@ import {
 	ADMITTED,
 	author,
 	carriedBy,
-	COLLECTION_ATTEMPTS,
 	validateFix,
 	fixerMarkdown,
 	fixerText,
