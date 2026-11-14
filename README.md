@@ -1650,7 +1650,12 @@ fitting several, such as a routed and a shadow reviewer at one effort whose
 sessions no record names, is split evenly among them and reported as `split`.
 Each risk tier's PRs, how many merged,
 how many a reviewer raised, and how many a later PR's `## Caused by` names
-show whether the tiers predict what breaks. Over the merged
+show whether the tiers predict what breaks. Each breakage a merged PR in the
+window names under `## Caused by` follows on its own line, by culprit, even one
+older than the window, which is read from GitHub: the culprit's tier, size,
+writers, and local reviewers, who found it when the bullet ends with
+`(found by a check)`, or a reviewer, the queue, a canary, a person, or a
+customer, and how long after the culprit merged the fix opened. Over the merged
 PRs come each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
 answers. A hand-back counts only while its draft is open, so a merged PR
@@ -1757,7 +1762,9 @@ removes it. While no sender runs, stops still queue, and the next stop says so
 once per outage.
 
 Each pass runs token-max on this host from the earliest queued session's first
-instant, reads the PRs updated since then, and posts `{"records": [...]}` with
+instant, reads the PRs updated since then, and posts
+`{"records": [...], "breakages": [...]}`, the breakages being those the merged
+PRs among them name under `## Caused by`, as `quest usage` reports them, with
 `Authorization: Bearer <token>`, one upload per endpoint and repository, each
 queued session with its sub-agents, which stop without the hook naming them.
 Each upload is checked with `parseUpload` before it is posted. A 2xx drops the
@@ -1767,6 +1774,24 @@ Any other failure keeps them queued, and the next stop says so once. A failing
 endpoint and repository back off, waiting a minute and doubling up to six
 hours, and sit out the passes meanwhile, so they never widen the others'
 window. token-max missing is retried each pass.
+
+A deploy or alert reports what it found with `quest records incident`, which
+posts one breakage at once to the checkout's endpoint and fails loud on any
+answer but a 2xx, since nothing retries it:
+
+```console
+$ quest records incident https://alerts.example/1 --found canary
+reported https://alerts.example/1 open, its culprit unknown
+$ quest records incident https://alerts.example/1 --found canary --pr 42
+reported https://alerts.example/1 against #42
+```
+
+The ID is the reporter's, and a report with the same ID replaces the last, so
+an incident stays open until it is reported again with `--pr`, and the store
+counts open ones apart. `--found` is one of `check`, `reviewer`, `queue`,
+`canary`, `person`, or `customer`, and `--at` sets when it was found, by
+default now. Reverts and red default-branch runs are not reported here: the
+store reads them from GitHub itself.
 
 ### Typed messages
 

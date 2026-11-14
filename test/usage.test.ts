@@ -605,8 +605,13 @@ describe("usage", () => {
 		const unrated = body10.slice(body10.indexOf("## Review")).replace(`${RISK}\n`, "");
 		const body9 = `${unrated}\n\n## Models\n\n- Size: L\n- Implementer: Claude Code, claude-opus-5-5, high effort\n`;
 		const fork13 = unrated.replaceAll(THREAD, "thread-fork");
+		// #11 also names #2, older than the window and read on its own, which a customer found, and #99, which is no PR.
 		const body11 =
-			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n";
+			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n" +
+			"- [acme/proj#2](https://github.com/acme/proj/pull/2) - dropped a header (found by a customer)\n" +
+			"- [acme/proj#99](https://github.com/acme/proj/pull/99) - mistyped\n";
+		const body2 =
+			"Old.\n\n## Models\n\n- Size: XS\n- Implementer: Codex, gpt-6.1-sol, low effort\n\n## Review\n\nRewritten by `quest review` after each round.\n\n- Risk: garbled\n";
 		// A closed duplicate of #11's fix: it never landed, so it fixed nothing.
 		// Newest updated first, as GitHub lists them, so the report stops at #8.
 		const pulls = [
@@ -757,6 +762,14 @@ describe("usage", () => {
 					fork: false,
 				});
 			if (url.pathname === "/repos/acme/proj/pulls") return json(pulls);
+			if (url.pathname === "/repos/acme/proj/pulls/2")
+				return json(
+					pr(2, "old/b", body2, "2026-10-19T00:00:00Z", {
+						merged_at: "2026-10-20T00:00:00Z",
+						closed_at: "2026-10-20T00:00:00Z",
+						updated_at: "2026-10-20T00:00:00Z",
+					}),
+				);
 			return new Response("not found", { status: 404 });
 		};
 		const calls: [Date, string[]][] = [];
@@ -940,6 +953,25 @@ describe("usage", () => {
 			"#10 L high merged: PR 10 (quest/m0/a)\n  risk: high, It rewrites the wire format.; raised from medium by a reviewer\n",
 		);
 		expect(text).toContain("#11 - - merged: PR 11 (fix/a)\n");
+		// #11 breaks down by culprit, #2 read from GitHub; #12 never merged, and #99 is no PR.
+		expect(report.breakages.map((b) => [b.culprit?.number, b.fix, b.found, b.at])).toEqual([
+			[10, 11, null, "2026-11-06T20:00:00.000Z"],
+			[2, 11, "customer", "2026-11-06T20:00:00.000Z"],
+		]);
+		expect(report.breakages[1]!.culprit).toEqual({
+			number: 2,
+			merged: "2026-10-20T00:00:00.000Z",
+			tier: null,
+			size: "XS",
+			writers: [{ harness: "Codex", model: "gpt-6.1-sol", effort: "low" }],
+			reviewers: [],
+		});
+		expect(report.breakages[0]!.culprit).toMatchObject({ tier: "high", size: "L" });
+		expect(text).toContain(
+			"Breakages, by the merged fix naming its culprit under ## Caused by:\n" +
+				"   #10  high, L, written by claude-opus-5-5 high, gpt-6.1-sol medium, reviewed by gpt-6.1-sol high, gemini-3-pro high, claude-opus-5-5 high, gpt-6.1-sol medium; fixed by #11, finder unrecorded, opened before it merged\n" +
+				"   #2   no tier, XS, written by gpt-6.1-sol low, no local review; fixed by #11, found by customer, 17.8d after merge\n",
+		);
 		// #10 is the one PR with a tier, and a later PR fixed it; #11, #5, and #6 of the rest merged.
 		expect(report.tiers).toEqual([
 			{ tier: "high", pulls: 1, merged: 1, raised: 1, culprits: 1 },

@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { type SessionRecord, parseRecord, parseUpload } from "../src/core";
+import { type BreakageRecord, type SessionRecord, parseBreakage, parseRecord, parseUpload } from "../src/core";
 import { buildRecords } from "../src/cli/records";
 import { transcriptFacts } from "../src/cli/transcript";
 import type { Pull, Session } from "../src/cli/usage";
@@ -97,13 +97,71 @@ describe("parseRecord", () => {
 	});
 
 	test("an upload fails whole on one bad record or a session sent twice", () => {
-		expect(parseUpload({ records: [record(), record({ session: "s2" })] }).records).toHaveLength(2);
-		expect(() => parseUpload({ records: [record(), record({ session: "s2", cost: Number.NaN })] })).toThrow("cost");
-		expect(() => parseUpload({ records: [record(), record()] })).toThrow("twice");
-		expect(() => parseUpload({ records: [], more: true })).toThrow("unknown field");
+		const upload = (records: unknown[]) => ({ records, breakages: [] });
+		expect(parseUpload(upload([record(), record({ session: "s2" })])).records).toHaveLength(2);
+		expect(() => parseUpload(upload([record(), record({ session: "s2", cost: Number.NaN })]))).toThrow("cost");
+		expect(() => parseUpload(upload([record(), record()]))).toThrow("twice");
+		expect(() => parseUpload({ ...upload([]), more: true })).toThrow("unknown field");
+		expect(() => parseUpload({ records: [] })).toThrow("no breakage list");
 		// A record may name no session, but no upload carries one, since the store replaces records by session.
 		expect(parseRecord(record({ session: null })).session).toBeNull();
-		expect(() => parseUpload({ records: [record({ session: null })] })).toThrow("names no session");
+		expect(() => parseUpload(upload([record({ session: null })]))).toThrow("names no session");
+	});
+});
+
+const breakage = (extra: Partial<BreakageRecord> = {}): BreakageRecord => ({
+	repository: "acme/proj",
+	culprit: {
+		number: 5,
+		merged: "2026-11-01T10:00:00.000Z",
+		tier: "low",
+		size: "S",
+		writers: [{ harness: "Claude", model: "claude-opus-5-5", effort: "medium" }],
+		reviewers: [{ harness: "Codex", model: "gpt-6.1-sol", effort: "high" }],
+	},
+	fix: 9,
+	incident: null,
+	found: "customer",
+	at: "2026-11-03T10:00:00.000Z",
+	...extra,
+});
+
+describe("parseBreakage", () => {
+	test("keeps a fix's breakage and an open or closed incident exactly", () => {
+		for (const sent of [
+			breakage(),
+			breakage({ fix: null, incident: "https://alerts.example/1", culprit: null, found: "canary" }),
+			breakage({ fix: null, incident: "deploy 42", found: null }),
+		])
+			expect(parseBreakage(JSON.parse(JSON.stringify(sent)))).toEqual(sent);
+	});
+
+	test.each([
+		["neither fix nor incident", breakage({ fix: null }), "neither or both"],
+		["both fix and incident", breakage({ incident: "x" }), "neither or both"],
+		["a fix with no culprit", breakage({ culprit: null }), "names no culprit"],
+		["a PR fixing itself", breakage({ fix: 5 }), "fixes itself"],
+		["an unknown finder", breakage({ found: "luck" as never }), "how it was found"],
+		["an incident spanning lines", breakage({ fix: null, incident: "a\nb" }), "spans lines"],
+		["an unknown tier", breakage({ culprit: { ...breakage().culprit!, tier: "severe" as never } }), "tier"],
+		[
+			"an extra culprit field",
+			breakage({ culprit: { ...breakage().culprit!, cost: 1 } as never }),
+			"unknown field cost",
+		],
+		["a mixed-case repository", breakage({ repository: "Acme/proj" }), "lowercase"],
+	])("refuses %s", (_, value, message) => {
+		expect(() => parseBreakage(value)).toThrow(message);
+	});
+
+	test("an upload holds each breakage once, a fix's by culprit and fix and an incident's by ID", () => {
+		const closed = breakage({ fix: null, incident: "i1" });
+		const open = breakage({ fix: null, incident: "i1", culprit: null });
+		expect(
+			parseUpload({ records: [], breakages: [breakage(), breakage({ fix: 10 }), closed] }).breakages,
+		).toHaveLength(3);
+		expect(() => parseUpload({ records: [], breakages: [breakage(), breakage()] })).toThrow("breakage twice");
+		expect(() => parseUpload({ records: [], breakages: [closed, open] })).toThrow("breakage twice");
 	});
 });
 

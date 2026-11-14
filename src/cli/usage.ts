@@ -8,10 +8,11 @@ import { recorded } from "./models-record";
 import { type ClaimDependencies, upstream } from "./claims";
 import { repositoryPath } from "../github/client";
 import { git } from "./git";
+import { culpritOf, culprits } from "./breakage";
 import { fixes } from "./land-fixer";
 import { MERGER } from "./land-watch-fix";
 import { githubRepository, requireRemote } from "./github";
-import { type GitHub, type ObjectValue, type Repository, link } from "../github/client";
+import { type GitHub, type ObjectValue, type Repository, link, object } from "../github/client";
 import { type OnlineReview, readOnlineReviews } from "../github/online-review";
 import {
 	type Counts,
@@ -23,7 +24,7 @@ import {
 	severityText,
 } from "./review-record";
 import { SEVERITIES } from "./review";
-import { ROLES, type Role, type SessionRecord, WAIT_KINDS } from "../core";
+import { type BreakageRecord, ROLES, type Role, type Seat, type SessionRecord, WAIT_KINDS } from "../core";
 import { buildRecords } from "./records";
 import { type LoggedWait, readWaits } from "./waits";
 
@@ -210,6 +211,11 @@ export interface Usage {
 	arms: ArmRow[];
 	tiers: TierRow[];
 	online: OnlineRow[];
+	/**
+	 * What the merged PRs in the window name under `## Caused by`, with each culprit as its body records it, wherever
+	 * it falls; narrowed, those whose culprit or fix is reported. Incidents reach only the store.
+	 */
+	breakages: BreakageRecord[];
 	/** The sessions on no PR reported here, from every repository and agent token-max reads; null when narrowed. */
 	unattributed: ({ sessions: number } & Tokens) | null;
 	/** Copies of a session found on several hosts, left out for its costliest copy, and the hosts they came from. */
@@ -402,20 +408,39 @@ export async function updatedPulls(client: GitHub, repository: Repository, since
 	return pulls;
 }
 
+/** The PR numbers of `repository` that `body`'s `## Caused by` section names as culprits, as {@link culprits} reads them. */
+export const causes = (body: string, repository: Repository): number[] =>
+	culprits(body, repository).map((cause) => cause.number);
+
+/** PR `number` of `repository`, or null when GitHub has none, as for a mistyped `## Caused by` link. */
+export async function readPull(client: GitHub, repository: Repository, number: number): Promise<Pull | null> {
+	const response = await client.request(`${repositoryPath(repository)}/pulls/${number}`, { allow: [404] });
+	return response.status === 404 ? null : pull(object(await response.json()));
+}
+
 /**
- * The PR numbers of `repository` that `body`'s `## Caused by` section names as culprits: each bullet that opens with
- * `[owner/repo#N](url) - why`. A link anywhere else on a line, as context or a "fixed by" aside, names no culprit.
+ * A breakage for each culprit the merged PRs among `pulls` name under `## Caused by`, found when the fix opened. A
+ * culprit outside `pulls` is read from GitHub, once each; a link to no PR names no culprit.
  */
-export function causes(body: string, repository: Repository): number[] {
-	const heading = /^## Caused by[ \t]*\r?$/m.exec(body);
-	if (!heading) return [];
-	const rest = body.slice(heading.index + heading[0].length);
-	const section = rest.slice(0, /^## /m.exec(rest)?.index ?? rest.length);
-	const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const name = `${escape(repository.owner)}/${escape(repository.repo)}`;
-	const culprit = new RegExp(`^- \\[${name}#(\\d+)\\]\\(https://github\\.com/${name}/pull/(\\d+)\\) - \\S`, "gim");
-	const found = [...section.matchAll(culprit)].filter((match) => match[1] === match[2]);
-	return [...new Set(found.map((match) => Number(match[1])))];
+export async function fixBreakages(client: GitHub, repository: Repository, pulls: Pull[]): Promise<BreakageRecord[]> {
+	const known = new Map<number, Pull | null>(pulls.map((each) => [each.number, each]));
+	const breakages: BreakageRecord[] = [];
+	for (const fix of pulls.filter((each) => each.state === "merged"))
+		for (const cause of culprits(fix.body, repository)) {
+			if (cause.number === fix.number) continue;
+			if (!known.has(cause.number)) known.set(cause.number, await readPull(client, repository, cause.number));
+			const culprit = known.get(cause.number);
+			if (!culprit) continue;
+			breakages.push({
+				repository: key(repository),
+				culprit: culpritOf(culprit),
+				fix: fix.number,
+				incident: null,
+				found: cause.found,
+				at: new Date(fix.created).toISOString(),
+			});
+		}
+	return breakages;
 }
 
 const sized = (value: string | null | undefined): Size | null =>
@@ -1041,6 +1066,10 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		// `quest ready` and hand edits drop the section before merge, so an earlier body counts too.
 		if (read?.bodies.some(handedBack)) row.handedBack = true;
 	}
+	const reported = new Set(rows.map((row) => row.number));
+	const breakages = (await fixBreakages(client, repository, all)).filter(
+		(each) => !narrowed || reported.has(each.fix!) || reported.has(each.culprit!.number),
+	);
 	return {
 		repository: key(repository),
 		since: options.since,
@@ -1052,6 +1081,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		arms: armRows(rows),
 		tiers: tierRows(rows),
 		online: onlineRows(rows),
+		breakages,
 		unattributed,
 		folded: { copies: folded.length, hosts: [...new Set(folded.map((session) => session.host))] },
 		incomplete: incomplete.map((session) => ({
@@ -1082,6 +1112,27 @@ const per = (s: Spend, what: string) =>
 const percent = (part: number, whole: number) => (whole ? `${Math.round((100 * part) / whole)}%` : "-");
 const answers = (r: Omit<OnlineReview, "reviewer" | "finalHead">) =>
 	`${r.findings} finding${r.findings === 1 ? "" : "s"}: ${r.accepted} accepted, ${r.declined} declined, ${r.unclassified} unclassified, ${r.unanswered} unanswered`;
+
+const seat = ({ model, effort }: Seat) => `${model} ${effort}`;
+
+/** A fix's breakage: its culprit's tier, size, writers, and reviewers, then who found it, and when after the merge. */
+function breakageText(b: BreakageRecord): string {
+	const c = b.culprit!;
+	const made = [
+		c.tier ?? "no tier",
+		c.size ?? "unsized",
+		c.writers.length ? `written by ${c.writers.map(seat).join(", ")}` : "no writer recorded",
+		c.reviewers.length ? `reviewed by ${c.reviewers.map(seat).join(", ")}` : "no local review",
+	].join(", ");
+	const ms = c.merged === null ? null : Date.parse(b.at) - Date.parse(c.merged);
+	const after =
+		ms === null
+			? "never merged"
+			: ms < 0
+				? "opened before it merged"
+				: `${ms >= 172_800_000 ? `${(ms / 86_400_000).toFixed(1)}d` : duration(ms)} after merge`;
+	return `${made}; fixed by #${b.fix}, ${b.found ? `found by ${b.found}` : "finder unrecorded"}, ${after}`;
+}
 
 /** Seconds under a minute, hours past two, else minutes. */
 const duration = (ms: number) =>
@@ -1248,6 +1299,12 @@ export function usageLines(report: Usage): string[] {
 					`reviewed ${o.reviewed}/${o.merged} (${percent(o.reviewed, o.merged)}), final head ${o.finalHead} (${percent(o.finalHead, o.merged)}), ${mean(o.findings, o.reviewed)} findings per PR reviewed, ${percent(o.accepted, o.findings)} accepted; ${answers(o)}`,
 				]),
 			),
+		);
+	if (report.breakages.length)
+		lines.push(
+			"",
+			"Breakages, by the merged fix naming its culprit under ## Caused by:",
+			...table(report.breakages.map((b) => [" ", `#${b.culprit!.number}`, breakageText(b)])),
 		);
 	const u = report.unattributed;
 	if (u) lines.push("", `Unattributed: ${u.sessions} sessions on no PR here, any repository or agent: ${tokens(u)}`);

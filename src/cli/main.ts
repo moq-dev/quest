@@ -21,6 +21,8 @@ import {
 	questBranch,
 	RISK_FILE,
 	renderBlocker,
+	FINDERS,
+	type Finder,
 	SIZES,
 	type Size,
 	unblocked,
@@ -84,7 +86,7 @@ import {
 import { CHECKED_CONTEXT, USER_ASKED, questRoot } from "./rules";
 import { messageLines, messages } from "./messages";
 import { logWait, pullWaitKind, readWaits } from "./waits";
-import { CHECKOUT_CONFIG, SEND_INTERVAL, background, runSender, tokensPath } from "./send";
+import { CHECKOUT_CONFIG, SEND_INTERVAL, background, reportIncident, runSender, tokensPath } from "./send";
 import { installSender, uninstallSender } from "./service";
 import { heal, init, stubFindings, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
@@ -1195,7 +1197,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"declines it. Rollups follow: spend by size, role, harness, model, and " +
 				"effort, accuracy by size and implementer, summing each branch's tallies but the shadow's once, where an Implementer line's own size, as (iterate, XS), wins " +
 				"over the PR's, with its writing cost over the merged PRs it was found on, the writer A/B by size and arm, counting a sized PR whose every Implementer line names the same arm, as (arm B), under its first line's writer with the spend of every session on it, local reviewers by size, harness, model, effort, and shadow, with their " +
-				"tallies and reviewing cost per PR, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, and each online reviewer's coverage and findings over the merged PRs. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
+				"tallies and reviewing cost per PR, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, each online reviewer's coverage and findings over the merged PRs, and each breakage a merged PR in the window names under ## Caused by: its culprit's tier, size, writers, and local reviewers, read from GitHub when older than the window, who found it when the line ends with (found by a check), or a reviewer, the queue, a canary, a person, or a customer, and how long after the culprit merged the fix opened. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
 				"other failures.",
@@ -1234,7 +1236,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Run the user's record sender until stopped, as its service does")
 		.description(
 			"Send each session record the stop hook queued, with the records of its sub-agents on this host, to the " +
-				`endpoint its checkout's ${CHECKOUT_CONFIG} names as records, posting {"records": [...]} with the token ` +
+				`endpoint its checkout's ${CHECKOUT_CONFIG} names as records, posting {"records": [...], "breakages": [...]}, the breakages the merged PRs among them name under ## Caused by, with the token ` +
 				`${tokensPath()} pairs with that endpoint as a bearer token, one upload per endpoint and repository, ` +
 				`then again every ${SEND_INTERVAL / 1000} seconds until stopped, at low priority. A record is built as quest usage ` +
 				"builds it, from token-max's sessions on this host since the earliest queued session's first instant and " +
@@ -1261,6 +1263,40 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					(line) => print(`${new Date().toISOString()} ${line}`),
 				),
 				() => 1,
+			);
+		});
+	recordsCommand
+		.command("incident")
+		.summary("Report a breakage a deploy or alert found, open until its culprit is named")
+		.argument(
+			"<id>",
+			"A stable ID for the incident, such as the alert's URL; a later report with it replaces this one",
+		)
+		.description(
+			"Post one breakage to the endpoint this checkout's " +
+				`${CHECKOUT_CONFIG} names, with the token ${tokensPath()} pairs with it, as {"records": [], "breakages": [...]}. ` +
+				"Without --pr the incident is open, its culprit unknown; report the same ID again with --pr to close it on " +
+				"its culprit, whose tier, size, writers, and local reviewers are read from its PR body. It posts at once " +
+				"and retries nothing, for a deploy or alert to call.\n\nUses GH_TOKEN, GITHUB_TOKEN, or gh auth token. " +
+				"Exits 0 when the endpoint took it, 2 for invalid arguments, and 1 for other failures, refusal included.",
+		)
+		.addOption(new Option("--found <by>", "Who or what found it").choices(FINDERS).makeOptionMandatory())
+		.option("--pr <number>", "The PR that caused it", positiveInteger("--pr"))
+		.option("--at <instant>", "When it was found, as an ISO 8601 instant (default: now)")
+		.action((id: string, options: { found: Finder; pr?: number; at?: string }) => {
+			if (/[\r\n]/.test(id) || id.trim() === "")
+				throw new UsageError("the incident ID must be one non-empty line");
+			const at = options.at === undefined ? Date.now() : Date.parse(options.at);
+			if (Number.isNaN(at)) throw new UsageError(`--at ${options.at} is not an ISO 8601 instant`);
+			settle(
+				reportIncident(
+					{ cwd: root(), id, found: options.found, pull: options.pr ?? null, at },
+					{ env: process.env, github: () => gitHubDependencies(warn), fetch: globalThis.fetch },
+				),
+				(breakage) =>
+					print(
+						`reported ${breakage.incident} ${breakage.culprit ? `against #${breakage.culprit.number}` : "open, its culprit unknown"}`,
+					),
 			);
 		});
 	const serviceDeps = () => ({

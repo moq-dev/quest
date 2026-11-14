@@ -33,5 +33,3 @@ covers only the repositories that have one.
 
 - [Development as a benchmark](/quest/m0/benchmark/README.md) - the
   decisions this builds on
-- [Breakage](/quest/m0/benchmark/breakage.md) - records what each tier's
-  PRs later broke
