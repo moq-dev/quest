@@ -19,6 +19,8 @@ const GONE = "83a08f0e-6ef1-4b41-ad0c-58b37fc993f8";
 const BOTH = "5d2c7f3e-8a41-4b6e-9f0d-2c6a1e7b4d93";
 const REMOTE = "a1c2e3f4-0000-4000-8000-000000000001";
 const ITERATE = "11111111-1111-1111-1111-111111111111";
+const HELPER = "33333333-3333-3333-3333-333333333333";
+const CHECKER = "44444444-4444-4444-4444-444444444444";
 
 // Checkouts since deleted: directories the test created and removed, so no host path of the same name is read.
 const removed = () => {
@@ -76,6 +78,7 @@ describe("parseSessions", () => {
 			host: "box",
 			harness: "codex",
 			id: THREAD,
+			parent: null,
 			review: false,
 			cwd: WORK,
 			repositories: ["acme/proj"],
@@ -244,7 +247,7 @@ describe("PR records", () => {
 		refuted,
 	});
 	const tallies = [
-		tally("codex", 3, { high: 1, medium: 1, low: 2 }, 2, 1),
+		{ ...tally("codex", 3, { high: 1, medium: 1, low: 2 }, 2, 1), first: { high: 1, medium: 0, low: 1 } },
 		{ ...tally("codex", 1, { high: 0, medium: 0, low: 0 }, 0, 0), shadow: true as const },
 		// A left-out reviewer still names its session, so `quest usage` counts that session as reviewing.
 		{ ...tally("claude", 2, { high: 2, medium: 0, low: 0 }, 1, 0), session: CLAUDE },
@@ -252,7 +255,9 @@ describe("PR records", () => {
 
 	test("reads back each reviewer's round and tally quest review records, after the land fixer's lines", () => {
 		const body = `Summary.\n\n## Review\n\nmechanical fix by codex, gpt-6.1-sol, medium effort: \`merged\` (head ${"d".repeat(40)})\n\n${reviewRecord([round, second], tallies)}\n\n## Models\n\n- Size: L\n`;
-		expect(body).toContain("\n- Rounds: 3; findings 4 (high 1, medium 1, low 2): fixed 2, refuted 1, open 1\n");
+		expect(body).toContain(
+			"\n- Rounds: 3; first round 2 (high 1, low 1); findings 4 (high 1, medium 1, low 2): fixed 2, refuted 1, open 1\n",
+		);
 		expect(parseReview(body)).toEqual([
 			{
 				harness: "Codex",
@@ -264,6 +269,7 @@ describe("PR records", () => {
 				score: 7,
 				tally: {
 					rounds: 3,
+					first: { high: 1, medium: 0, low: 1 },
 					findings: { high: 1, medium: 1, low: 2 },
 					fixed: 2,
 					refuted: 1,
@@ -282,6 +288,7 @@ describe("PR records", () => {
 				score: 10,
 				tally: {
 					rounds: 1,
+					first: null,
 					findings: { high: 0, medium: 0, low: 0 },
 					fixed: 0,
 					refuted: 0,
@@ -301,6 +308,7 @@ describe("PR records", () => {
 				score: null,
 				tally: {
 					rounds: 2,
+					first: null,
 					findings: { high: 2, medium: 0, low: 0 },
 					fixed: 1,
 					refuted: 0,
@@ -328,8 +336,18 @@ describe("PR records", () => {
 		const settled = "1; findings 2 (low 2): fixed 1, refuted 0, settled 1, open 0";
 		expect(
 			parseReview(`## Review\n\n${record.replace(/^- Rounds: .*$/m, `- Rounds: ${settled}`)}\n`)[0]!.tally,
-		).toEqual({ rounds: 1, findings: { high: 0, medium: 0, low: 2 }, fixed: 1, refuted: 0, settled: 1, open: 0 });
+		).toEqual({
+			rounds: 1,
+			first: null,
+			findings: { high: 0, medium: 0, low: 2 },
+			fixed: 1,
+			refuted: 0,
+			settled: 1,
+			open: 0,
+		});
 		for (const line of [
+			"2; first round 1 (high 2); findings 2 (high 2): fixed 2, refuted 0, open 0",
+			"2; first round 1 (severe 1); findings 1 (high 1): fixed 1, refuted 0, open 0",
 			"1; findings 1 (high 1): fixed 0, refuted 0, open 0",
 			"1; findings 2 (high 1): fixed 1, refuted 0, open 1",
 			"1; findings 2 (low 2): fixed 1, refuted 0, settled 1, open 1",
@@ -435,6 +453,14 @@ describe("usage", () => {
 				}),
 				models: [{ ...exported(GONE, "claude-opus-5-5", "high", 8).models[0], complete: false }],
 			},
+			// The implementer's sub-agent on a smaller model in a detached checkout, which takes its parent's PR and
+			// role though it started after the PR opened, and the reviewer's sub-agent, which reviews with it.
+			exported(HELPER, "claude-haiku-5-5", "low", 0.5, {
+				parent: CLAUDE,
+				branches: [{ name: "HEAD", first: "2026-11-06T12:30:00Z", last: "2026-11-06T12:31:00Z" }],
+				start: "2026-11-06T12:30:00Z",
+			}),
+			exported(CHECKER, "gpt-6.1-sol", "high", 0.25, { parent: THREAD, start: "2026-11-06T12:10:00Z" }),
 			// Another host's session in a directory of the same path: this host's sessions there tell nothing of it.
 			exported(REMOTE, "claude-opus-5-5", "high", 4, { host: "box", repositories: null }),
 			// A checkout with remotes for both the fork and its upstream, on a branch each has a PR from.
@@ -465,7 +491,7 @@ describe("usage", () => {
 			"- Reviewer: Codex, gpt-6.1-sol, high effort",
 			`- Session: \`${THREAD}\`, round 2`,
 			"- Score: 9/10, `Fine.`",
-			"- Rounds: 2; findings 2 (high 1, low 1): fixed 1, refuted 1, open 0",
+			"- Rounds: 2; first round 1 (high 1); findings 2 (high 1, low 1): fixed 1, refuted 1, open 0",
 			"- Findings: none",
 			"",
 			// A harness quest review does not run, as a hand-written record may name, reads as any other.
@@ -663,6 +689,8 @@ describe("usage", () => {
 			[null, "codex", THREAD, "reviewing", "high"],
 			[null, "codex", ITERATE, "iterating", "high"],
 			[null, "claude", OWNED, "iterating", "unknown"],
+			[null, "claude", HELPER, "implementing", "low"],
+			[null, "codex", CHECKER, "reviewing", "high"],
 		]);
 		// #12 names #10 too, but closed without merging.
 		expect(ten.fixedBy).toEqual([11]);
@@ -687,10 +715,11 @@ describe("usage", () => {
 			complete: false,
 		});
 		expect(report.spend.map((s) => [s.size, s.role, s.harness, s.cost])).toEqual([
+			["L", "implementing", "claude", 0.5],
 			["L", "implementing", "claude", 5],
 			["L", "iterating", "claude", 7],
 			["L", "iterating", "codex", 2],
-			["L", "reviewing", "codex", 1],
+			["L", "reviewing", "codex", 1.25],
 		]);
 		const tally = {
 			rounds: 2,
@@ -717,6 +746,29 @@ describe("usage", () => {
 		expect(report.accuracy.map((a) => [a.size, a.model, a.pulls, a.reviewed, a.score, a.tally, a.fixes])).toEqual([
 			["S", "gpt-6.1-sol", 1, 1, 17, tally, 1],
 			["L", "claude-opus-5-5", 7, 5, 85, five, 1],
+		]);
+		// #10's writing spend: the iterate's Sol session to its own line though the efforts differ, the Opus
+		// session of unknown effort to the Opus line, and the Haiku sub-agent, which no line names, to the PR's main
+		// writer. Its other reviewers record no first round, so no PR counts toward the writers' first rounds.
+		expect(report.accuracy.map((a) => [a.spent.pulls, a.spent.cost, a.firstRounds.pulls])).toEqual([
+			[1, 2, 0],
+			[1, 12.5, 0],
+		]);
+		// The routed Sol reviewer over #10, #5, #6, and #3, each branch's latest record, with its first rounds; its
+		// session and sub-agent price it on #10.
+		const sol = report.reviewers.find((r) => r.size === "L" && r.model === "gpt-6.1-sol" && !r.shadow)!;
+		expect([sol.reviewed, sol.tally.rounds, sol.firstRounds, sol.spent.pulls, sol.spent.cost]).toEqual([
+			4,
+			9,
+			{ pulls: 4, findings: { high: 4, medium: 0, low: 0 } },
+			1,
+			1.25,
+		]);
+		expect(report.reviewers.filter((r) => r.size === "L").map((r) => [r.model, r.effort, r.shadow])).toEqual([
+			["claude-opus-5-5", "high", false],
+			["gpt-6.1-sol", "high", false],
+			["gpt-6.1-sol", "medium", true],
+			["gemini-3-pro", "high", false],
 		]);
 		expect(ten.online).toEqual([
 			{
@@ -747,7 +799,12 @@ describe("usage", () => {
 		expect(text).toContain(
 			"  review: Claude Code, claude-opus-5-5, high effort; not in the latest run; rounds 1, findings 1 (medium 1): fixed 1, refuted 0, open 0\n",
 		);
-		expect(text).toContain("rounds 2.0, findings 3 (high 1, medium 1, low 1): fixed 2, refuted 1, open 0;");
+		expect(text).toContain(
+			"rounds 2.0, findings 3 (high 1, medium 1, low 1): fixed 2, refuted 1, open 0, first rounds 0: 0; 0 land fixes, 1 later fixes; ~$2.00 per merged PR over 1",
+		);
+		expect(text).toContain(
+			"   L  Codex        gpt-6.1-sol      high            4 reviewed: rounds 2.3, findings 8 (high 4, medium 1, low 3): fixed 4, refuted 2, settled 1, open 1, first rounds 4: 4 (high 4); ~$1.25 per PR reviewed over 1\n",
+		);
 		expect(ten.review.map((r) => [r.effort, r.shadow])).toEqual([
 			["high", false],
 			["high", false],
@@ -767,7 +824,7 @@ describe("usage", () => {
 		);
 		expect(text).toContain("fixed later by: #11\n");
 		expect(text).toContain(
-			"    implementing  local  claude  claude-opus-5-5  high     in 10, cache 20 written 30 read, out 40, ~$5.00\n",
+			"    implementing  local  claude  claude-opus-5-5   high     in 10, cache 20 written 30 read, out 40, ~$5.00\n",
 		);
 		expect(text).toContain(
 			"Unattributed: 5 sessions on no PR here, any repository or agent: in 50, cache 100 written 150 read, out 200, ~$30.00 or more\n",

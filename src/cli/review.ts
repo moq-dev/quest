@@ -313,6 +313,8 @@ export interface Tally {
 	 * reviewer keeps open becomes that reviewer's, since its round reports it again unlinked to the earlier one.
 	 */
 	findings: Record<(typeof SEVERITIES)[number], number>;
+	/** Its first round's findings by severity, which later rounds leave as they were; absent on a tally begun before. */
+	first?: Record<(typeof SEVERITIES)[number], number>;
 	fixed: number;
 	refuted: number;
 }
@@ -1261,7 +1263,9 @@ export function parseState(value: unknown): State {
 				typeof tally.rounds === "number" &&
 				typeof tally.fixed === "number" &&
 				typeof tally.refuted === "number" &&
-				SEVERITIES.every((severity) => typeof tally.findings?.[severity] === "number"),
+				SEVERITIES.every((severity) => typeof tally.findings?.[severity] === "number") &&
+				(tally.first === undefined ||
+					SEVERITIES.every((severity) => typeof tally.first?.[severity] === "number")),
 		) &&
 		state.sessions.every(
 			(session) =>
@@ -1596,6 +1600,10 @@ export function tallied(
 		own.session = round.session;
 		own.rounds++;
 		for (const finding of round.findings) own.findings[finding.severity]++;
+		if (own.rounds === 1) {
+			own.first = { high: 0, medium: 0, low: 0 };
+			for (const finding of round.findings) own.first[finding.severity]++;
+		}
 		by.set(seatKey(round), own);
 	}
 	const run = rounds.map(({ round }) => seatKey(round));
