@@ -42,11 +42,6 @@ Agent's choices, for the implementer to revisit:
   the categories and the one-line note leave the host; a note names no
   customer and quotes no message.
 
-## Required
-
-- [Send each session's record to Kixel Code](/quest/m0/benchmark/records.md) -
-  the record the split is added to, and the exact waits it excludes
-
 ## Related
 
 - [Mistake audit](/quest/m0/mistake-audit.md) - groups what went wrong
