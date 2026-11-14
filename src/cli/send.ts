@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import {
 	closeSync,
 	existsSync,
+	linkSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
@@ -12,11 +13,10 @@ import {
 	renameSync,
 	rmSync,
 	writeFileSync,
-	writeSync,
 } from "node:fs";
 import { homedir, setPriority } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { type SessionRecord } from "../core";
 import { type GitHubDependencies, GitHub } from "../github/client";
@@ -37,6 +37,8 @@ export interface Pending {
 	session: string;
 	/** Its transcript's first instant, epoch ms, so token-max reads all of it. */
 	start: number;
+	/** A fresh ID per enqueue, so a sender settles only the stop it sent, never one queued during its upload. */
+	queued: string;
 	/** The checkout's `origin` on GitHub, as `owner/repo`, and where its quest tree sits below the top level. */
 	origin: string;
 	prefix: string;
@@ -199,6 +201,7 @@ export function queue(stopped: Stopped, env: NodeJS.ProcessEnv = process.env): Q
 		harness: stopped.harness,
 		session: stopped.session,
 		start,
+		queued: randomUUID(),
 		origin: repository,
 		prefix: run(["rev-parse", "--show-prefix"]).stdout.trim(),
 		endpoint,
@@ -295,7 +298,8 @@ export async function sendQueued(deps: SendDependencies): Promise<Sent[] | null>
 	for (let first = true; first || existsSync(again); first = false) {
 		if (!acquire(lock)) {
 			writeFileSync(again, "");
-			return first ? null : sent;
+			// The holder may have let go and checked for another pass just before the request: take it then.
+			if (!acquire(lock)) return first ? null : sent;
 		}
 		try {
 			do {
@@ -319,22 +323,55 @@ export async function sendQueued(deps: SendDependencies): Promise<Sent[] | null>
 	return sent;
 }
 
-/** Take the lock file, or take it over from a sender that died; false while a live one holds it. */
+/**
+ * Take the lock file, or take it over from a sender that died; false while a live one holds it. The lock appears
+ * whole, linked from a file already naming this process, so no reader sees it empty, and a dead owner's lock is moved
+ * aside before it is removed, so two senders reclaiming at once never remove each other's new lock.
+ */
 function acquire(lock: string): boolean {
-	for (let tries = 0; tries < 2; tries++) {
+	const mine = `${lock}.${process.pid}`;
+	const aside = `${lock}.stale.${process.pid}`;
+	writeFileSync(mine, String(process.pid), { mode: 0o600 });
+	const read = (path: string) => {
 		try {
-			const fd = openSync(lock, "wx", 0o600);
-			writeSync(fd, String(process.pid));
-			closeSync(fd);
-			return true;
+			return readFileSync(path, "utf8");
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			const pid = Number(readFileSync(lock, "utf8"));
-			if (Number.isSafeInteger(pid) && pid > 0 && alive(pid)) return false;
-			rmSync(lock, { force: true });
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+			throw error;
 		}
+	};
+	try {
+		for (let tries = 0; tries < 3; tries++) {
+			try {
+				linkSync(mine, lock);
+				return true;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			}
+			const owner = read(lock);
+			if (owner === null) continue;
+			const pid = Number(owner);
+			if (Number.isSafeInteger(pid) && pid > 0 && alive(pid)) return false;
+			try {
+				renameSync(lock, aside);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+				throw error;
+			}
+			// Another sender took the lock between the read and the move: put it back and leave it the queue.
+			if (read(aside) !== owner) {
+				try {
+					linkSync(aside, lock);
+				} catch {}
+				rmSync(aside, { force: true });
+				return false;
+			}
+			rmSync(aside, { force: true });
+		}
+		return false;
+	} finally {
+		rmSync(mine, { force: true });
 	}
-	return false;
 }
 
 function alive(pid: number): boolean {
@@ -377,8 +414,8 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 		const { endpoint, origin, prefix } = group[0]!.pending;
 		try {
 			const token = tokenFor(endpoint, deps.env);
-			if (token === null) {
-				// The user removed the token since the session was queued: it sends nothing.
+			// The user removed the token since the session was queued, or the endpoint refused it: it sends nothing.
+			if (token === null || existsSync(refusal(deps.env, endpoint, token))) {
 				for (const q of group) settle(q);
 				continue;
 			}
@@ -415,6 +452,7 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 				pulls,
 				waits,
 				emit,
+				since,
 			});
 			const upload = [...records.values()];
 			const response = await deps.fetch(endpoint, {

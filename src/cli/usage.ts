@@ -486,15 +486,25 @@ export interface RecordSources {
 	waits: LoggedWait[];
 	/** The sessions to build records for; by default, those on a PR. */
 	emit?: Set<Session>;
+	/** The window's start, epoch ms. */
+	since: number;
 }
 
 /** Each session's record, attributed to the PRs in the window, whose review records name their reviewers. */
 export function sessionRecords(sources: RecordSources): Map<Session, SessionRecord> {
-	const { repository, sessions, evidence, pulls, waits, emit } = sources;
+	const { repository, sessions, evidence, pulls, waits, emit, since } = sources;
 	const reviewers = new Set(
 		pulls.flatMap((pull) => parseReview(pull.body).flatMap((review) => review.session ?? [])),
 	);
-	return buildRecords({ repository, sessions, own: attribute(sessions, evidence, pulls), reviewers, waits, emit });
+	return buildRecords({
+		repository,
+		sessions,
+		own: attribute(sessions, evidence, pulls),
+		reviewers,
+		waits,
+		emit,
+		since,
+	});
 }
 
 function spendRows(pulls: PullRow[]): SpendRow[] {
@@ -714,6 +724,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 			evidence: exported,
 			pulls: all,
 			waits: deps.waits(since),
+			since,
 		});
 		const attributed: Session[] = [];
 		const left: Session[] = [];

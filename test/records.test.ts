@@ -42,6 +42,12 @@ const record = (extra: Partial<SessionRecord> = {}): SessionRecord => ({
 });
 
 describe("parseRecord", () => {
+	test("orders instants by time, not by their text", () => {
+		expect(parseRecord(record({ start: "2026-11-06T10:00:00Z", end: "2026-11-06T10:00:00.001Z" })).end).toBe(
+			"2026-11-06T10:00:00.001Z",
+		);
+	});
+
 	test("keeps a well-formed record exactly", () => {
 		const sent = record();
 		expect(parseRecord(JSON.parse(JSON.stringify(sent)))).toEqual(sent);
@@ -78,6 +84,11 @@ describe("parseRecord", () => {
 				],
 			}),
 			"names what ended it",
+		],
+		[
+			"an end before its start in finer precision",
+			record({ start: "2026-11-06T10:00:00.001Z", end: "2026-11-06T10:00:00Z" }),
+			"ends before it starts",
 		],
 		["a mixed-case repository", record({ repository: "Acme/Proj" }), "lowercase"],
 		["a quest that is not a path", record({ quest: "a.md" }), "quest path"],
@@ -322,6 +333,7 @@ describe("buildRecords", () => {
 				logged("gate-run", "11:30:00", ["run"], "/w/.worktrees/b"),
 			],
 			emit: new Set([coordinator, a, b, helper, loose]),
+			since: 0,
 		});
 		const of = (s: Session) => records.get(s)!;
 		expect(of(coordinator)).toMatchObject({ pulls: [1, 2], role: "coordinating", branch: null, quest: null });
@@ -372,6 +384,7 @@ describe("buildRecords", () => {
 					],
 				},
 			],
+			since: 0,
 		});
 		expect(records.get(merger)).toMatchObject({ role: "merging", waits: [] });
 		expect(records.get(reviewer)!.role).toBe("reviewing");
@@ -389,7 +402,48 @@ describe("buildRecords", () => {
 			own: new Map([[on, pull(1, "quest/m0/a", "09:00:00")]]),
 			reviewers: new Set(),
 			waits: [],
+			since: 0,
 		});
 		expect([...records.keys()]).toEqual([on]);
+	});
+
+	test("a person's wait is windowed, and an unreadable transcript leaves waits unknown", () => {
+		const transcript = join(tempDir(), "t.jsonl");
+		const ask = (id: string, asked: string, answered: string) =>
+			line({
+				type: "assistant",
+				timestamp: `2026-11-06T${asked}Z`,
+				message: { content: [{ type: "tool_use", id, name: "AskUserQuestion", input: {} }] },
+			}) +
+			line({
+				type: "user",
+				timestamp: `2026-11-06T${answered}Z`,
+				message: { content: [{ type: "tool_result", tool_use_id: id }] },
+			});
+		writeFileSync(transcript, ask("q1", "08:00:00", "08:30:00") + ask("q2", "10:10:00", "10:20:00"));
+		const asked = session("asked", { files: [transcript] });
+		const broken = join(tempDir(), "b.jsonl");
+		writeFileSync(broken, '{"type":"assistant","AskUserQuestion" not json\n{"type":"summary"}\n');
+		const skipped = session("skipped", { files: [broken], skippedLines: 1, complete: false });
+		const p = pull(1, "quest/m0/a", "09:00:00");
+		const input = {
+			repository: "acme/proj",
+			sessions: [asked, skipped],
+			own: new Map([
+				[asked, p],
+				[skipped, p],
+			]),
+			reviewers: new Set<string>(),
+			waits: [],
+			since: at("09:00:00"),
+		};
+		const records = buildRecords(input);
+		expect(records.get(asked)!.waits).toEqual([
+			{ kind: "person", start: "2026-11-06T10:10:00.000Z", end: "2026-11-06T10:20:00.000Z", until: null },
+		]);
+		expect(records.get(skipped)!.waits).toBeNull();
+		// A line token-max read but quest cannot is a shape quest does not know.
+		const unknown = { ...skipped, skippedLines: 0 };
+		expect(() => buildRecords({ ...input, sessions: [unknown], own: new Map([[unknown, p]]) })).toThrow("not JSON");
 	});
 });

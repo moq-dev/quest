@@ -155,14 +155,14 @@ export function parseRecord(value: unknown): SessionRecord {
 					end: instant(w.end, "a wait's end"),
 					until: maybe(w.until, "a wait's until"),
 				};
-				if (wait.end < wait.start) fail("a wait ends before it starts");
+				if (Date.parse(wait.end) < Date.parse(wait.start)) fail("a wait ends before it starts");
 				if (wait.until !== null && wait.kind !== "pull" && wait.kind !== "merge-queue")
 					fail(`a ${wait.kind} wait names what ended it`);
 				return wait;
 			}) ?? null,
 	};
 	if (new Set(record.pulls).size !== record.pulls.length) fail("a PR listed twice");
-	if (record.end < record.start) fail("it ends before it starts");
+	if (Date.parse(record.end) < Date.parse(record.start)) fail("it ends before it starts");
 	return record;
 }
 

@@ -1599,7 +1599,9 @@ the last and the store follows the session as it grows. The type is
   session; a Claude sub-agent's commands carry its parent's ID, so a wait goes
   to the one sub-agent of it running then in the wait's directory. Waits may
   overlap, as parallel gates do. `null` means they could not be read, as for a
-  session on another host in `quest usage --ssh`.
+  session on another host in `quest usage --ssh`, or one whose transcript has
+  lines token-max could not read either. Like token costs, waits count only
+  those that ended since the window's start.
 
 The record holds no prompt, reply, or transcript text: skills and questions
 are read from the transcript on this host, and only their names and times

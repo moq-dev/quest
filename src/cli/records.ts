@@ -39,6 +39,8 @@ export interface RecordInput {
 	waits: LoggedWait[];
 	/** The sessions to build records for; by default, those on a PR. Every session still counts for lineage. */
 	emit?: Set<Session>;
+	/** The window's start, epoch ms: a person's wait that ended before it, like a logged one, is left out. */
+	since: number;
 }
 
 const id = (harness: string, session: string) => `${harness}\0${session}`;
@@ -83,15 +85,11 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 		return unique.length ? { pulls: unique, via: "children" } : { pulls: [], via: "none" };
 	};
 
-	const facts = new Map<Session, TranscriptFacts>();
+	const facts = new Map<Session, TranscriptFacts | null>();
 	const factsOf = (s: Session): TranscriptFacts | null => {
 		if (s.host !== null) return null;
-		let found = facts.get(s);
-		if (!found) {
-			found = transcriptFacts(s.harness, s.files);
-			facts.set(s, found);
-		}
-		return found;
+		if (!facts.has(s)) facts.set(s, readFacts(s));
+		return facts.get(s)!;
 	};
 
 	const roleOf = (s: Session & { id: string }, depth = 0): Role => {
@@ -120,12 +118,14 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 		const own = input.own.get(s);
 		const branch = own?.branch ?? (via === "none" ? lastBranch(s) : pulls.length === 1 ? pulls[0]!.branch : null);
 		const local = factsOf(s);
-		const person: SessionWait[] = (local?.questions ?? []).map((q) => ({
-			kind: "person",
-			start: iso(q.start),
-			end: iso(q.end),
-			until: null,
-		}));
+		const person: SessionWait[] = (local?.questions ?? [])
+			.filter((q) => q.end >= input.since)
+			.map((q) => ({
+				kind: "person",
+				start: iso(q.start),
+				end: iso(q.end),
+				until: null,
+			}));
 		records.set(s, {
 			harness: s.harness,
 			session: s.id,
@@ -159,6 +159,20 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 		});
 	}
 	return records;
+}
+
+/**
+ * A local session's transcript facts, or null when they cannot be read: a file deleted since token-max read it, or
+ * one with lines token-max could not read either, whose cost is already a lower bound. Any other failure is a shape
+ * quest does not know, and throws.
+ */
+function readFacts(s: Session): TranscriptFacts | null {
+	try {
+		return transcriptFacts(s.harness, s.files);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT" || s.skippedLines > 0) return null;
+		throw error;
+	}
 }
 
 /** The branch a session named last, or null. */
