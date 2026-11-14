@@ -61,6 +61,8 @@ export interface SessionRow {
 	host: string | null;
 	harness: string;
 	session: string | null;
+	/** The session that spawned it, as a sub-agent's. */
+	parent: string | null;
 	role: Role;
 	models: Spent[];
 }
@@ -101,7 +103,11 @@ export interface SpendRow extends Tokens {
 }
 
 /** Spend at list price over the PRs it was found on, which leave out PRs whose sessions no host reported. */
-export type Spend = { pulls: number } & Tokens;
+export type Spend = {
+	pulls: number;
+	/** The part of `cost` split evenly with other seats of its model and effort that nothing told apart. */
+	split: number;
+} & Tokens;
 
 /** First rounds summed over the reviewed PRs whose every counted tally records one. */
 export interface FirstRounds {
@@ -538,6 +544,7 @@ function attribute(
 			host: session.host,
 			harness: session.harness,
 			session: session.id,
+			parent: session.parent,
 			role: found.role,
 			models: session.models,
 		});
@@ -585,7 +592,7 @@ const noCounts = (): Omit<Counts, "first"> => ({
 	open: 0,
 });
 const noFirst = (): FirstRounds => ({ pulls: 0, findings: { high: 0, medium: 0, low: 0 } });
-const noSpend = (): Spend => ({ pulls: 0, ...zero() });
+const noSpend = (): Spend => ({ pulls: 0, split: 0, ...zero() });
 
 /** Add one PR's `tallies` of a cell to its counts, its rounds as their most, and to its first rounds when all have one. */
 function count(to: { tally: Omit<Counts, "first">; firstRounds: FirstRounds }, tallies: Counts[]) {
@@ -605,26 +612,31 @@ function count(to: { tally: Omit<Counts, "first">; firstRounds: FirstRounds }, t
 }
 
 /**
- * A PR's spend split among `seats`, as its record names them: each model's spend to the seats of that model, of its
- * effort where both name one, and spend of a model no seat names, as a sub-agent on a smaller model, to the seat
- * that took the most, the PR's main one. Spend that fits several seats goes to the first, the PR's writer, when an
- * implementing session spent it, and to the others when an iterating one did; what still fits several, such as a
- * routed and a shadow reviewer at one effort, is split evenly among them rather than given to one. Returns each
- * seat's share, by index, and nothing without a seat.
+ * A PR's spend split among `seats`, as its record names them: spend whose `seat` is known, as a reviewer's session its
+ * record names, to that seat; each model's other spend to the seats of that model, of its effort where both name one;
+ * and spend of a model no seat names, as a sub-agent on a smaller model, to the seat that took the most, the PR's
+ * main one. Spend that fits several seats goes to the first, the PR's writer, when an implementing session spent it,
+ * and to the others when an iterating one did; what still fits several is split evenly among them and counted as
+ * `split`, rather than given to one. Returns each seat's share, by index, and nothing without a seat.
  */
 export function share(
-	spent: (Spent & { role?: Role })[],
+	spent: (Spent & { role?: Role; seat?: number })[],
 	seats: { model: string; effort: string }[],
-): Map<number, Tokens> {
-	const shares = new Map<number, Tokens>();
+): Map<number, Tokens & { split: number }> {
+	const shares = new Map<number, Tokens & { split: number }>();
 	if (seats.length === 0) return shares;
-	const into = (seat: number, from: Tokens) => {
-		const to = shares.get(seat) ?? zero();
+	const into = (seat: number, from: Tokens, split = false) => {
+		const to = shares.get(seat) ?? { split: 0, ...zero() };
 		add(to, from);
+		if (split) to.split += from.cost;
 		shares.set(seat, to);
 	};
 	const rest: Spent[] = [];
 	for (const each of spent) {
+		if (each.seat !== undefined) {
+			into(each.seat, each);
+			continue;
+		}
 		const same = seats.flatMap((seat, i) => (seat.model === each.model ? [i] : []));
 		const effort = each.effort ?? "unknown";
 		const exact = same.filter((i) => seats[i]!.effort === effort);
@@ -634,7 +646,7 @@ export function share(
 		else if (fits.length > 1 && each.role === "iterating" && fits.some((i) => i !== 0))
 			fits = fits.filter((i) => i !== 0);
 		if (fits.length === 0) rest.push(each);
-		else for (const seat of fits) into(seat, part(each, fits.length));
+		else for (const seat of fits) into(seat, part(each, fits.length), fits.length > 1);
 	}
 	if (rest.length > 0) {
 		const main = [...shares].reduce<[number, Tokens] | undefined>(
@@ -697,7 +709,8 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 		const writing = each.sessions
 			.filter((session) => session.role !== "reviewing")
 			.flatMap((session) => session.models.map((spent) => ({ ...spent, role: session.role })));
-		const shares = each.state === "merged" ? share(writing, distinct) : new Map<number, Tokens>();
+		const shares =
+			each.state === "merged" ? share(writing, distinct) : new Map<number, Tokens & { split: number }>();
 		for (const [i, implementer] of distinct.entries()) {
 			const size = implementer.size;
 			const id = JSON.stringify([size, implementer.harness, implementer.model, implementer.effort]);
@@ -730,6 +743,7 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			const spent = shares.get(i);
 			if (spent) {
 				row.spent.pulls++;
+				row.spent.split += spent.split;
 				add(row.spent, spent);
 			}
 			// The shadow's findings measure an effort step, not the writer, so they stay out of the writer's row.
@@ -777,10 +791,23 @@ function reviewerRows(pulls: PullRow[]): ReviewerRow[] {
 		return found;
 	};
 	for (const each of pulls) {
-		const reviewing = each.sessions.filter((session) => session.role === "reviewing").flatMap((s) => s.models);
+		// A session its record names, or that one's sub-agent, is that reviewer's, so a routed and a shadow reviewer
+		// at one effort are told apart.
+		const named = (session: SessionRow) => {
+			const at = each.review.findIndex(
+				(review) =>
+					review.session !== null &&
+					(review.session === session.session || review.session === session.parent),
+			);
+			return at < 0 ? undefined : at;
+		};
+		const reviewing = each.sessions
+			.filter((session) => session.role === "reviewing")
+			.flatMap((session) => session.models.map((spent) => ({ ...spent, seat: named(session) })));
 		for (const [i, spent] of share(reviewing, each.review)) {
 			const to = row(each, each.review[i]!).spent;
 			to.pulls++;
+			to.split += spent.split;
 			add(to, spent);
 		}
 		if (!latest.has(each)) continue;

@@ -1551,9 +1551,14 @@ writing sessions' cost on the merged PRs they were found on, so cost per merged
 PR divides by those PRs, not the ones no host reported: a PR's spend on a
 model goes to its line of that model, of the same effort where both name one,
 and spend on a model no line names, such as a sub-agent on a smaller model,
-to the line that took the most. Local reviewers roll up the same way, by the
+to the line that took the most. Spend that fits several lines goes to the
+first line when an implementing session spent it and to the later ones when an
+iterating one did. Local reviewers roll up the same way, by the
 PR's size and each reviewer's harness, model, effort, and shadow mark: PRs
-reviewed, tallies, first rounds, and reviewing cost per PR. Over the merged
+reviewed, tallies, first rounds, and reviewing cost per PR, where a session
+the record names, or its sub-agent, goes to that reviewer. Spend still left
+fitting several, such as a routed and a shadow reviewer at one effort whose
+sessions no record names, is split evenly among them and reported as `split`. Over the merged
 PRs come each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
 answers. A hand-back counts only while its draft is open, so a merged PR

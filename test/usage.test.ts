@@ -396,7 +396,8 @@ describe("share", () => {
 		complete: true,
 		...(role ? { role } : {}),
 	});
-	const costs = (shares: Map<number, { cost: number }>) => [...shares].map(([i, t]) => [i, t.cost]);
+	const costs = (shares: Map<number, { cost: number; split: number }>) =>
+		[...shares].map(([i, t]) => [i, t.cost, t.split]);
 
 	test("tells seats of one model and effort apart by role, and splits what it cannot", () => {
 		// An M writer on Opus medium and an S iterate on Opus medium: each session goes to its own seat.
@@ -415,20 +416,17 @@ describe("share", () => {
 				),
 			),
 		).toEqual([
-			[0, 4],
-			[1, 2],
+			[0, 4, 0],
+			[1, 2, 0],
 		]);
-		// A routed and a shadow reviewer at one effort: their spend is split evenly.
+		// A routed and a shadow reviewer at one effort: a session the record names goes to its seat, and the rest is
+		// split evenly and counted as split.
+		const reviewers = seats.map(() => ({ model: "gpt-6.1-sol", effort: "low" }));
 		expect(
-			costs(
-				share(
-					[spend("gpt-6.1-sol", "low", 1)],
-					seats.map(() => ({ model: "gpt-6.1-sol", effort: "low" })),
-				),
-			),
+			costs(share([{ ...spend("gpt-6.1-sol", "low", 8), seat: 0 }, spend("gpt-6.1-sol", "low", 2)], reviewers)),
 		).toEqual([
-			[0, 0.5],
-			[1, 0.5],
+			[0, 9, 1],
+			[1, 1, 1],
 		]);
 	});
 });
