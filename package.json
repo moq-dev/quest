@@ -24,10 +24,10 @@
 		"fix": "prettier --write ."
 	},
 	"dependencies": {
-		"commander": "15.0.0",
+		"commander": "15.1.0",
 		"mdast-util-from-markdown": "2.1.0",
 		"mdast-util-gfm-strikethrough": "2.0.1",
-		"mdast-util-gfm-table": "2.0.0",
+		"mdast-util-gfm-table": "2.0.1",
 		"micromark-extension-gfm-strikethrough": "2.1.0",
 		"micromark-extension-gfm-table": "2.1.2"
 	},
@@ -36,7 +36,7 @@
 		"@types/node": "26.6.6",
 		"prettier": "3.9.10",
 		"typescript": "7.0.2",
-		"vitest": "5.0.5"
+		"vitest": "5.1.0"
 	},
 	"trustedDependencies": []
 }
