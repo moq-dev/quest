@@ -48,6 +48,81 @@ checkpoints and outages to count by hand:
   maintainer with its tally, as a decision in the PR, rather than changing
   it unasked. Replacing a stale model id with the same vendor's newer one,
   below, needs no decision, as this check always did.
+- Chart cost against quality for every writer and reviewer cell, as decided
+  2026-11-11 (user, /quest-plan, moq-dev/quest#642's follow-ups), so a
+  routing change is read off the frontier rather than tables. The agent
+  running the check makes the charts itself, from the saved
+  `quest usage --since <date> --json` (with `--ssh` for each host that runs
+  agents) and the benchmark table below. The charts are an artifact of the
+  run, and no chart code goes into `quest`. It draws them as Mermaid
+  charts in its PR body, which GitHub renders and any harness can write
+  (user, 2026-11-14, /quest-run on
+  [moq-dev/quest#721](https://github.com/moq-dev/quest/pull/721); rejected:
+  images in a secret gist, a claude.ai page made by hand). Mermaid's
+  quadrant charts scale both axes to 0-1, so each title gives the scales
+  and each point's label carries its PR count. The body also puts every
+  plotted number in tables, so a reviewer can check the charts. Each
+  chart names its date range, the command, and each point's PR count.
+  Points too thin for the run's variance estimate stay on the chart,
+  marked thin in their label, never dropped. Cells whose
+  `Implementer:` effort is `unknown` stay separate points. The charts:
+  - Writers, one point per `accuracy` row (size, model, effort): cost per
+    merged PR, `spent.cost / spent.pulls`, against each quality measure
+    on its own chart. The measures are first-round findings per PR
+    (`firstRounds.findings` over `firstRounds.pulls`), review rounds per
+    reviewed PR (`tally.rounds / reviewed`), hand-backs per PR
+    (`handedBack / pulls`, which counts only drafts still open until
+    [hand-backs on merged PRs](/quest/m0/routing-evidence/handbacks.md)
+    lands), and later
+    `## Caused by` escapes per merged PR (`fixes / merged`).
+  - Local reviewers, one point per `reviewers` row (PR size, harness,
+    model, effort, shadow): cost per PR reviewed, `spent.cost /
+    spent.pulls`, against findings per reviewed PR (`tally.findings` over
+    `reviewed`) and the share fixed, `tally.fixed` over the findings
+    settled one way or another (fixed, refuted, or settled).
+  - Online reviewers, which run on flat plans and so have no cost per
+    review, on a chart of their own: one point per `online` row, coverage
+    (`reviewed / merged`) against findings per reviewed PR, labelled with
+    its acceptance (`accepted / findings`).
+  - Published benchmarks, one chart per suite in the table below: score
+    against that suite's cost per task, for the same models and efforts,
+    with the frontier drawn. Benchmark and PR metrics differ, so compare
+    where each cell sits on each chart's frontier, not its values; flag a
+    cell on the frontier in one and not the other.
+- Published benchmarks, refreshed each run: rows with a stated effort, each
+  with its source and the date it was read. Cost is per task in the suite's
+  own terms; `~` marks a value derived from the source's prose.
+
+  | Suite | Model | Effort | Score | $ per task | Read |
+  |---|---|---|---|---|---|
+  | [mypriors](https://mypriors.com/adamholter) 10-benchmark index, subscription cost | Haiku 5.5 | high | 30 | 0.0034 | 2026-11-09 |
+  | mypriors | Haiku 5.5 | xhigh | 34.6 | 0.0053 | 2026-11-09 |
+  | mypriors | Sonnet 5.5 | medium | 30.7 | 0.012 | 2026-11-09 |
+  | mypriors | Opus 5.5 | low | 34.7 | 0.015 | 2026-11-09 |
+  | mypriors | Opus 5.5 | medium | 48 | 0.037 | 2026-11-09 |
+  | mypriors | Opus 5.5 | high | 51.7 | 0.052 | 2026-11-09 |
+  | mypriors | Opus 5.5 | xhigh | 57.3 | 0.092 | 2026-11-09 |
+  | mypriors | gpt-6.1-sol | low | 34.8 | 0.0094 | 2026-11-09 |
+  | mypriors | gpt-6.1-sol | medium | 46.3 | 0.021 | 2026-11-09 |
+  | mypriors | gpt-6.1-sol | high | 50.3 | 0.034 | 2026-11-09 |
+  | mypriors | gpt-6.1-sol | xhigh | 52.5 | 0.045 | 2026-11-09 |
+  | mypriors | Fable 5.2 | medium | 56 | 3.8 | 2026-11-09 |
+  | [Anthropic's cost guide](https://platform.claude.com/docs/en/about-claude/models/optimizing-for-cost-and-intelligence), SWE-bench Pro 478-problem subset, % solved | Sonnet 5.5 | medium | ~80.6 | ~0.057 | 2026-11-13 |
+  | Anthropic, SWE-bench Pro | Sonnet 5.5 | high | 87.6 | ~0.096 | 2026-11-13 |
+  | Anthropic, SWE-bench Pro | Opus 5.5 | low | 87.4 | 0.11 | 2026-11-13 |
+  | Anthropic, SWE-bench Pro | Opus 5.5 | medium | 92.8 | 0.21 | 2026-11-13 |
+  | Anthropic, SWE-bench Pro | Opus 5.5 | high | 95.3 | 0.29 | 2026-11-13 |
+  | Anthropic, SWE-bench Pro | Opus 5.5 | xhigh | 96.7 | 0.74 | 2026-11-13 |
+  | [Artificial Analysis](https://artificialanalysis.ai/models/comparisons/claude-sonnet-5-5-high-vs-claude-opus-5-5-low), Terminal-Bench 4.0, % | Haiku 5.5 | xhigh | 29.3 | 0.25 | 2026-11-11 |
+  | Artificial Analysis, Terminal-Bench 4.0 | Sonnet 5.5 | medium | 29.8 | 0.78 | 2026-11-11 |
+  | Artificial Analysis, Terminal-Bench 4.0 | Sonnet 5.5 | high | 43.9 | 1.64 | 2026-11-13 |
+  | Artificial Analysis, Terminal-Bench 4.0 | Opus 5.5 | low | 31.3 | 0.98 | 2026-11-13 |
+
+  Anthropic gives Sonnet high's cost per solved task ($0.11), Sonnet
+  medium as about 7 points lower at about 59% of high's cost per task, and
+  calls its figures directional. Its guide also has rows on internal
+  suites without a cost per task, which stay out. The `max` rows stay out
+  too, since `quest agent` and `quest review` refuse `max`.
 
 - Read [routing evidence](/quest/m0/routing-evidence/README.md)'s readout
   and baseline first: its shadow reviews and writer A/B measure the cells
@@ -80,25 +155,16 @@ checkpoints and outages to count by hand:
     effort (6 of the 20 lines said `unknown`).
   - Changed after that run rather than on tallies (maintainer, 2026-11-09):
     XS writes on Haiku xhigh instead of high. Tally that cell fresh. The
-    source was [mypriors.com/adamholter](https://mypriors.com/adamholter)'s
-    score against subscription cost per task, a 10-benchmark index read
-    off its chart (score, then $ per task), which this check compares each
-    cell with again:
-    - Haiku 5.5: high 30, $0.0034; xhigh 34.6, $0.0053.
-    - Sonnet 5.5: medium 30.7, $0.012; below the frontier at every effort,
-      so rejected for XS then, though Anthropic's
+    source was the mypriors rows of the benchmark table above:
+    - Sonnet 5.5 sat below the frontier at every effort, so it was rejected
+      for XS then, though Anthropic's
       [model guide](https://claude.dev/blog/which-claude-model-should-you-build-with/)
       favors it for scoped coding.
-    - Opus 5.5: low 34.7, $0.015; medium 48, $0.037; high 51.7, $0.052;
-      xhigh 57.3, $0.092; max 58.9, $0.15.
-    - gpt-6.1-sol: low 34.8, $0.0094; medium 46.3, $0.021; high 50.3,
-      $0.034; xhigh 52.5, $0.045.
-    - Fable 5.2: medium 56, $3.8; max 64.6, $26.5. Rejected for XL, which
-      stays on Opus xhigh, on the frontier; zero-data-retention
-      organizations may also be refused Fable.
-    - S looks lopsided: Opus low scores well below its Sol medium fallback
-      (34.7 against 46.3) for $0.006 less a task. Check its tallies before
-      moving it.
+    - Fable 5.2 was rejected for XL, which stays on Opus xhigh, on the
+      frontier; zero-data-retention organizations may also be refused
+      Fable.
+    - S looked lopsided: Opus low scored well below its Sol medium fallback
+      (34.7 against 46.3) for $0.006 less a task.
   - Changed again (maintainer, 2026-11-11): XS writes on Sonnet high
     instead of Haiku xhigh, since two Haiku XS agents in a row on
     [moq-dev/quest#643](https://github.com/moq-dev/quest/pull/643) died

@@ -33,6 +33,8 @@ export interface RecordInput {
 	sessions: Session[];
 	/** The PR each session's own branch heads, from `attribute`. */
 	own: Map<Session, Pull>;
+	/** The repositories a session is known to be in, or null when unknown. */
+	known?: (session: Session) => string[] | null;
 	/** Session IDs a PR's review record names as reviewers, and as its risk classifier. */
 	reviewers: Set<string>;
 	classifiers: Set<string>;
@@ -79,8 +81,13 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 		if (own) return { pulls: [own], via: "own" };
 		const parent = parentOf(s);
 		if (parent && depth < input.sessions.length) {
-			const inherited = pullsOf(parent, depth + 1);
-			if (inherited.pulls.length) return { pulls: inherited.pulls, via: "parent" };
+			// A session known to be in another repository keeps out of its parent's PRs, as a sub-agent in another
+			// checkout does.
+			const known = input.known?.(s) ?? null;
+			const inherited = pullsOf(parent, depth + 1).pulls.filter(
+				(p) => known === null || (p.repository !== null && known.includes(p.repository)),
+			);
+			if (inherited.length) return { pulls: inherited, via: "parent" };
 		}
 		const found = descendants(s);
 		const unique = [...new Map(found.map((p) => [p.number, p])).values()].sort((a, b) => a.number - b.number);

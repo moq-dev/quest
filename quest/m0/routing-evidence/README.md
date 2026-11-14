@@ -66,9 +66,14 @@ Readout, the agent's choices for the implementer to revisit:
   chooses to.
 - Carry the tallies into [the model check](/quest/m1/model-check.md)'s
   baseline.
-- Publish the arms' cost and quality as
-  [the cost-against-quality charts](/quest/m0/routing-evidence/charts.md) quest describes,
-  and link them with the recommendations.
+- Chart the arms' cost against quality as
+  [the model check](/quest/m1/model-check.md)'s chart procedure describes,
+  one point per arm, and link the charts with the recommendations. Its
+  `quest usage --json` rows give each arm's cost per merged PR and
+  first-round findings, and each shadow pair's cost and findings per PR.
+  Only tallies begun after
+  [moq-dev/quest#721](https://github.com/moq-dev/quest/pull/721) merged
+  record a first round, so count first rounds only over those.
 
 Baseline from the 2026-11-11 audit, at API list price:
 

@@ -20,6 +20,7 @@ import {
 	findingsText,
 	parseReview,
 	reviewSessions,
+	severityText,
 } from "./review-record";
 import { SEVERITIES } from "./review";
 import { ROLES, type Role, type SessionRecord, WAIT_KINDS } from "../core";
@@ -47,7 +48,7 @@ export interface Session {
 	harness: string;
 	/** The harness's own ID, as `quest review` records it; null when the transcript names none. */
 	id: string | null;
-	/** The session that spawned it, as a Claude sub-agent's parent or a Codex review's thread. */
+	/** The ID of the session that spawned it, as a sub-agent's or a Codex review's parent; null for a top session. */
 	parent: string | null;
 	review: boolean;
 	cwd: string | null;
@@ -108,6 +109,19 @@ export interface SpendRow extends Tokens {
 	sessions: number;
 }
 
+/** Spend at list price over the PRs it was found on, which leave out PRs whose sessions no host reported. */
+export type Spend = {
+	pulls: number;
+	/** The part of `cost` split evenly with other seats of its model and effort that nothing told apart. */
+	split: number;
+} & Tokens;
+
+/** First rounds summed over the reviewed PRs whose every counted tally records one. */
+export interface FirstRounds {
+	pulls: number;
+	findings: Counts["findings"];
+}
+
 export interface AccuracyRow {
 	/** The implementer's own size, as its line ends with it, else the PR's. */
 	size: Size | null;
@@ -123,15 +137,33 @@ export interface AccuracyRow {
 	scored: number;
 	score: number;
 	/** Every reviewer's findings but the shadow's across every round on the reviewed PRs, and as `rounds`, each PR's most rounds. */
-	tally: Counts;
+	tally: Omit<Counts, "first">;
+	firstRounds: FirstRounds;
+	/** Its writing sessions' spend on its merged PRs, so `spent.cost / spent.pulls` is its cost per merged PR. */
+	spent: Spend;
 	/** The land fixer's model-run fixes, leaving out the watcher's own base merges. */
 	landFixes: number;
 	/** Later PRs naming these PRs under `## Caused by`. */
 	fixes: number;
 }
 
+/** One local reviewer seat over the PRs reported, by the PR's size, since review efforts follow it. */
+export interface ReviewerRow {
+	size: Size | null;
+	harness: string;
+	model: string;
+	effort: string;
+	shadow: boolean;
+	/** PRs whose record tallies this reviewer, each branch counted once, and its findings across every round. */
+	reviewed: number;
+	tally: Omit<Counts, "first">;
+	firstRounds: FirstRounds;
+	/** Its reviewing sessions' spend, so `spent.cost / spent.pulls` is its cost per PR reviewed. */
+	spent: Spend;
+}
+
 /** One writer A/B arm at one size, over the PRs every Implementer line of which names it. */
-export interface ArmRow extends Omit<AccuracyRow, "size"> {
+export interface ArmRow extends Omit<AccuracyRow, "size" | "spent"> {
 	size: Size;
 	arm: Arm;
 	/** The sessions on its PRs in every role, and their spend. */
@@ -173,6 +205,7 @@ export interface Usage {
 	pulls: PullRow[];
 	spend: SpendRow[];
 	accuracy: AccuracyRow[];
+	reviewers: ReviewerRow[];
 	/** The writer A/B's arms, while it runs. */
 	arms: ArmRow[];
 	tiers: TierRow[];
@@ -476,7 +509,11 @@ function owners(sessions: Session[]): (session: Session) => string[] | null {
  * session reached the branch and headed from a repository its host resolved for it. `evidence` holds every exported
  * copy, folded ones included, since a dropped copy may be the only one naming its directory's repository.
  */
-function attribute(sessions: Session[], evidence: Session[], pulls: Pull[]): Map<Session, Pull> {
+function attribute(
+	sessions: Session[],
+	evidence: Session[],
+	pulls: Pull[],
+): { own: Map<Session, Pull>; known: (session: Session) => string[] | null } {
 	const byBranch = new Map<string, Pull[]>();
 	for (const each of [...pulls].sort((a, b) => a.created - b.created))
 		byBranch.set(each.branch, [...(byBranch.get(each.branch) ?? []), each]);
@@ -503,7 +540,7 @@ function attribute(sessions: Session[], evidence: Session[], pulls: Pull[]): Map
 			}
 		}
 	}
-	return own;
+	return { own, known: owned };
 }
 
 /** What `sessionRecords` builds from. */
@@ -534,7 +571,7 @@ export function sessionRecords(sources: RecordSources): Map<Session, SessionReco
 	return buildRecords({
 		repository,
 		sessions,
-		own: attribute(sessions, evidence, pulls),
+		...attribute(sessions, evidence, pulls),
 		reviewers,
 		classifiers,
 		waits,
@@ -569,8 +606,7 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 				const key = JSON.stringify([session.harness, session.session ?? anonymous.get(session)]);
 				if (!row.seen.has(key)) row.sessions++;
 				row.seen.add(key);
-				// A session on several PRs, as a coordinator is, counts toward each in equal shares.
-				add(row, share(spent, session.pulls.length));
+				add(row, portion(session, spent));
 			}
 	const roles: readonly Role[] = ROLES;
 	return [...rows.values()]
@@ -583,50 +619,145 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 		);
 }
 
-/** `spent` divided over `parts` PRs. */
-const share = (spent: Tokens, parts: number): Tokens =>
-	parts <= 1
-		? spent
-		: {
-				input: spent.input / parts,
-				cacheWrite: spent.cacheWrite / parts,
-				cacheRead: spent.cacheRead / parts,
-				output: spent.output / parts,
-				cost: spent.cost / parts,
-				complete: spent.complete,
-			};
+const noCounts = (): Omit<Counts, "first"> => ({
+	rounds: 0,
+	findings: { high: 0, medium: 0, low: 0 },
+	fixed: 0,
+	refuted: 0,
+	settled: 0,
+	open: 0,
+});
+const noFirst = (): FirstRounds => ({ pulls: 0, findings: { high: 0, medium: 0, low: 0 } });
+const noSpend = (): Spend => ({ pulls: 0, split: 0, ...zero() });
 
-/** The fields an accuracy row and an arm row both tally over their PRs. */
-type Outcomes = Pick<
-	AccuracyRow,
-	"pulls" | "merged" | "handedBack" | "reviewed" | "scored" | "score" | "tally" | "landFixes" | "fixes"
->;
+/** Add one PR's `tallies` of a cell to its counts, its rounds as their most, and to its first rounds when all have one. */
+function count(to: { tally: Omit<Counts, "first">; firstRounds: FirstRounds }, tallies: Counts[]) {
+	to.tally.rounds += Math.max(...tallies.map((tally) => tally.rounds));
+	for (const tally of tallies) {
+		for (const severity of SEVERITIES) to.tally.findings[severity] += tally.findings[severity];
+		to.tally.fixed += tally.fixed;
+		to.tally.refuted += tally.refuted;
+		to.tally.settled += tally.settled;
+		to.tally.open += tally.open;
+	}
+	if (tallies.every((tally) => tally.first !== null)) {
+		to.firstRounds.pulls++;
+		for (const tally of tallies)
+			for (const severity of SEVERITIES) to.firstRounds.findings[severity] += tally.first![severity];
+	}
+}
 
-const noOutcomes = (): Outcomes => ({
+/**
+ * A PR's spend split among `seats`, as its record names them: spend whose `seat` is known, as a reviewer's session its
+ * record names, to that seat; each model's other spend to the seats of that model, of its effort where both name one;
+ * and spend of a model no seat names, as a sub-agent on a smaller model, to the seat that took the most, the PR's
+ * main one. Spend that fits several seats goes to the first, the PR's writer, when an implementing session spent it,
+ * and to the others when an iterating one did; what still fits several is split evenly among them and counted as
+ * `split`, rather than given to one. Returns each seat's share, by index, and nothing without a seat.
+ */
+export function share(
+	spent: (Spent & { role?: Role; seat?: number })[],
+	seats: { model: string; effort: string }[],
+): Map<number, Tokens & { split: number }> {
+	const shares = new Map<number, Tokens & { split: number }>();
+	if (seats.length === 0) return shares;
+	const into = (seat: number, from: Tokens, split = false) => {
+		const to = shares.get(seat) ?? { split: 0, ...zero() };
+		add(to, from);
+		if (split) to.split += from.cost;
+		shares.set(seat, to);
+	};
+	const rest: Spent[] = [];
+	for (const each of spent) {
+		if (each.seat !== undefined) {
+			into(each.seat, each);
+			continue;
+		}
+		const same = seats.flatMap((seat, i) => (seat.model === each.model ? [i] : []));
+		const effort = each.effort ?? "unknown";
+		const exact = same.filter((i) => seats[i]!.effort === effort);
+		const loose = same.filter((i) => seats[i]!.effort === "unknown" || effort === "unknown");
+		let fits = exact.length > 0 ? exact : loose.length > 0 ? loose : same;
+		if (fits.length > 1 && each.role === "implementing" && fits.includes(0)) fits = [0];
+		else if (fits.length > 1 && each.role === "iterating" && fits.some((i) => i !== 0))
+			fits = fits.filter((i) => i !== 0);
+		if (fits.length === 0) rest.push(each);
+		else for (const seat of fits) into(seat, part(each, fits.length), fits.length > 1);
+	}
+	if (rest.length > 0) {
+		const main = [...shares].reduce<[number, Tokens] | undefined>(
+			(best, entry) => (best === undefined || entry[1].cost > best[1].cost ? entry : best),
+			undefined,
+		);
+		for (const each of rest) into(main?.[0] ?? 0, each);
+	}
+	return shares;
+}
+
+/** A session's spend on one PR: on several, as a coordinator is, it counts toward each in equal shares. */
+const portion = (session: SessionRow, spent: Spent): Spent =>
+	session.pulls.length > 1 ? { ...spent, ...part(spent, session.pulls.length) } : spent;
+const shareOf = (session: SessionRow): Spent[] => session.models.map((spent) => portion(session, spent));
+
+/** One `n`th of `tokens`. */
+function part(tokens: Tokens, n: number): Tokens {
+	return {
+		input: tokens.input / n,
+		cacheWrite: tokens.cacheWrite / n,
+		cacheRead: tokens.cacheRead / n,
+		output: tokens.output / n,
+		cost: tokens.cost / n,
+		complete: tokens.complete,
+	};
+}
+
+const noOutcomes = (): Omit<AccuracyRow, "size" | "harness" | "model" | "effort" | "spent"> => ({
 	pulls: 0,
 	merged: 0,
 	handedBack: 0,
 	reviewed: 0,
 	scored: 0,
 	score: 0,
-	tally: { rounds: 0, findings: { high: 0, medium: 0, low: 0 }, fixed: 0, refuted: 0, settled: 0, open: 0 },
+	tally: noCounts(),
+	firstRounds: noFirst(),
 	landFixes: 0,
 	fixes: 0,
 });
 
+/** Add a PR's outcomes to a writer's or arm's row, counting its tallies only when it is its branch's `latest`. */
+function outcome(row: ReturnType<typeof noOutcomes>, each: PullRow, latest: Set<PullRow>) {
+	row.pulls++;
+	if (each.state === "merged") row.merged++;
+	if (each.handedBack) row.handedBack++;
+	row.fixes += each.fixedBy.length;
+	row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
+	// The shadow's findings measure an effort step, not the writer, so they stay out of the writer's row.
+	const counted = latest.has(each) ? each.review.filter((review) => review.tally !== null && !review.shadow) : [];
+	if (counted.length === 0) return;
+	row.reviewed++;
+	for (const { score } of counted)
+		if (score !== null) {
+			row.scored++;
+			row.score += score;
+		}
+	count(
+		row,
+		counted.map((review) => review.tally!),
+	);
+}
+
 /**
- * Adds a PR's outcomes to rollup rows. A branch's saved tallies span every PR from it, so only one PR that has both
- * a tally and an implementer to count it for counts them: the one whose record holds the latest tally, as the most
- * rounds show, since each round rewrites only its own PR's record; the newest breaks a tie. A deleted fork has no
- * repository, so its PR stands alone.
+ * A branch's saved tallies span every PR from it, so only one of its PRs that `counts` counts them: the one whose
+ * record holds the latest tally, as the most rounds show, since each round rewrites only its own PR's record; the
+ * newest breaks a tie. A deleted fork has no repository, so its PR stands alone.
  */
-function outcomes(pulls: PullRow[]): (row: Outcomes, each: PullRow) => void {
+function tallied(pulls: PullRow[], counts: (pull: PullRow) => boolean): Set<PullRow> {
 	const branch = (each: PullRow) => JSON.stringify([each.repository ?? each.number, each.branch]);
 	const rounds = (each: PullRow) =>
 		each.review.reduce((sum, review) => sum + (review.shadow ? 0 : (review.tally?.rounds ?? 0)), 0);
 	const latest = new Map<string, PullRow>();
 	for (const each of pulls) {
-		if (each.implementers.length === 0 || each.review.every((review) => review.tally === null)) continue;
+		if (!counts(each) || each.review.every((review) => review.tally === null)) continue;
 		const other = latest.get(branch(each));
 		if (
 			other === undefined ||
@@ -635,58 +766,110 @@ function outcomes(pulls: PullRow[]): (row: Outcomes, each: PullRow) => void {
 		)
 			latest.set(branch(each), each);
 	}
-	return (row, each) => {
-		row.pulls++;
-		if (each.state === "merged") row.merged++;
-		if (each.handedBack) row.handedBack++;
-		row.fixes += each.fixedBy.length;
-		row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
-		// The shadow's findings measure an effort step, not the writer, so they stay out of the writer's row.
-		const tallied =
-			latest.get(branch(each)) === each
-				? each.review.filter((review) => review.tally !== null && !review.shadow)
-				: [];
-		if (tallied.length > 0) {
-			row.reviewed++;
-			row.tally.rounds += Math.max(...tallied.map((review) => review.tally!.rounds));
-		}
-		for (const { score, tally } of tallied) {
-			if (score !== null) {
-				row.scored++;
-				row.score += score;
-			}
-			for (const severity of SEVERITIES) row.tally.findings[severity] += tally!.findings[severity];
-			row.tally.fixed += tally!.fixed;
-			row.tally.refuted += tally!.refuted;
-			row.tally.settled += tally!.settled;
-			row.tally.open += tally!.open;
-		}
-	};
+	return new Set(latest.values());
 }
 
 function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	const rows = new Map<string, AccuracyRow>();
-	const count = outcomes(pulls);
+	const latest = tallied(pulls, (each) => each.implementers.length > 0);
 	for (const each of pulls) {
 		// A session that pushed twice is one implementer of the PR, whether or not each line names its size.
-		const distinct = new Map(
-			each.implementers.map(({ harness, model, effort, size }) => {
-				const at = { harness, model, effort, size: size ?? each.size };
-				return [JSON.stringify(at), at];
-			}),
-		);
-		for (const implementer of distinct.values()) {
-			const id = JSON.stringify([implementer.size, implementer.harness, implementer.model, implementer.effort]);
+		const distinct = [
+			...new Map(
+				each.implementers.map(({ harness, model, effort, size }) => {
+					const at = { harness, model, effort, size: size ?? each.size };
+					return [JSON.stringify(at), at];
+				}),
+			).values(),
+		];
+		const writing = each.sessions
+			.filter((session) => session.role === "implementing" || session.role === "iterating")
+			.flatMap((session) => shareOf(session).map((spent) => ({ ...spent, role: session.role })));
+		const shares =
+			each.state === "merged" ? share(writing, distinct) : new Map<number, Tokens & { split: number }>();
+		for (const [i, implementer] of distinct.entries()) {
+			const size = implementer.size;
+			const id = JSON.stringify([size, implementer.harness, implementer.model, implementer.effort]);
 			let row = rows.get(id);
 			if (!row) {
-				row = { ...implementer, ...noOutcomes() };
+				row = {
+					size,
+					harness: implementer.harness,
+					model: implementer.model,
+					effort: implementer.effort,
+					...noOutcomes(),
+					spent: noSpend(),
+				};
 				rows.set(id, row);
 			}
-			count(row, each);
+			outcome(row, each, latest);
+			const spent = shares.get(i);
+			if (spent) {
+				row.spent.pulls++;
+				row.spent.split += spent.split;
+				add(row.spent, spent);
+			}
 		}
 	}
 	return [...rows.values()].sort((a, b) =>
 		order([a.size, a.harness, a.model, a.effort], [b.size, b.harness, b.model, b.effort]),
+	);
+}
+
+function reviewerRows(pulls: PullRow[]): ReviewerRow[] {
+	const rows = new Map<string, ReviewerRow>();
+	const latest = tallied(pulls, () => true);
+	const row = (each: PullRow, review: ReviewSummary) => {
+		const id = JSON.stringify([each.size, review.harness, review.model, review.effort, review.shadow]);
+		let found = rows.get(id);
+		if (!found) {
+			found = {
+				size: each.size,
+				harness: review.harness,
+				model: review.model,
+				effort: review.effort,
+				shadow: review.shadow,
+				reviewed: 0,
+				tally: noCounts(),
+				firstRounds: noFirst(),
+				spent: noSpend(),
+			};
+			rows.set(id, found);
+		}
+		return found;
+	};
+	for (const each of pulls) {
+		// A session its record names, or that one's sub-agent, is that reviewer's, so a routed and a shadow reviewer
+		// at one effort are told apart.
+		const named = (session: SessionRow) => {
+			const at = each.review.findIndex(
+				(review) =>
+					review.session !== null &&
+					(review.session === session.session || review.session === session.parent),
+			);
+			return at < 0 ? undefined : at;
+		};
+		const reviewing = each.sessions
+			.filter((session) => session.role === "reviewing")
+			.flatMap((session) => shareOf(session).map((spent) => ({ ...spent, seat: named(session) })));
+		for (const [i, spent] of share(reviewing, each.review)) {
+			const to = row(each, each.review[i]!).spent;
+			to.pulls++;
+			to.split += spent.split;
+			add(to, spent);
+		}
+		if (!latest.has(each)) continue;
+		for (const review of each.review.filter((review) => review.tally !== null)) {
+			const to = row(each, review);
+			to.reviewed++;
+			count(to, [review.tally!]);
+		}
+	}
+	return [...rows.values()].sort((a, b) =>
+		order(
+			[a.size, a.harness, a.model, a.effort, String(a.shadow)],
+			[b.size, b.harness, b.model, b.effort, String(b.shadow)],
+		),
 	);
 }
 
@@ -697,7 +880,7 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
  */
 function armRows(pulls: PullRow[]): ArmRow[] {
 	const rows = new Map<string, ArmRow>();
-	const count = outcomes(pulls);
+	const latest = tallied(pulls, (each) => each.implementers.length > 0);
 	for (const each of pulls) {
 		const first = each.implementers[0];
 		if (!first?.arm || each.size === null || each.unread.length > 0) continue;
@@ -709,7 +892,7 @@ function armRows(pulls: PullRow[]): ArmRow[] {
 			row = { size: each.size, arm, harness, model, effort, ...noOutcomes(), sessions: 0, spend: zero() };
 			rows.set(id, row);
 		}
-		count(row, each);
+		outcome(row, each, latest);
 		for (const session of each.sessions) {
 			row.sessions++;
 			for (const spent of session.models) add(row.spend, spent);
@@ -853,6 +1036,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		pulls: rows,
 		spend: spendRows(rows),
 		accuracy: accuracyRows(rows),
+		reviewers: reviewerRows(rows),
 		arms: armRows(rows),
 		tiers: tierRows(rows),
 		online: onlineRows(rows),
@@ -878,6 +1062,11 @@ const compact = (n: number) =>
 const tokens = (t: Tokens) =>
 	`in ${compact(t.input)}, cache ${compact(t.cacheWrite)} written ${compact(t.cacheRead)} read, out ${compact(t.output)}, ~$${t.cost.toFixed(2)}${t.complete ? "" : " or more"}`;
 const mean = (sum: number, count: number) => (count ? (sum / count).toFixed(1) : "-");
+const firsts = (f: FirstRounds) => `first rounds ${f.pulls}: ${severityText(f.findings)}`;
+const per = (s: Spend, what: string) =>
+	s.pulls
+		? `~$${(s.cost / s.pulls).toFixed(2)}${s.complete ? "" : " or more"} per ${what} over ${s.pulls}${s.split ? `, ~$${s.split.toFixed(2)} of it split with other seats` : ""}`
+		: `no ${what} priced`;
 const percent = (part: number, whole: number) => (whole ? `${Math.round((100 * part) / whole)}%` : "-");
 const answers = (r: Omit<OnlineReview, "reviewer" | "finalHead">) =>
 	`${r.findings} finding${r.findings === 1 ? "" : "s"}: ${r.accepted} accepted, ${r.declined} declined, ${r.unclassified} unclassified, ${r.unanswered} unanswered`;
@@ -989,7 +1178,22 @@ export function usageLines(report: Usage): string[] {
 					a.harness,
 					a.model,
 					a.effort,
-					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: score ${mean(a.score, a.scored)}, rounds ${mean(a.tally.rounds, a.reviewed)}, ${findingsText(a.tally)}; ${a.landFixes} land fixes, ${a.fixes} later fixes`,
+					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: score ${mean(a.score, a.scored)}, rounds ${mean(a.tally.rounds, a.reviewed)}, ${findingsText({ ...a.tally, first: null })}, ${firsts(a.firstRounds)}; ${a.landFixes} land fixes, ${a.fixes} later fixes; ${per(a.spent, "merged PR")}`,
+				]),
+			),
+		);
+	if (report.reviewers.length)
+		lines.push(
+			"",
+			"Local reviewers by PR size:",
+			...table(
+				report.reviewers.map((r) => [
+					" ",
+					r.size ?? "-",
+					r.harness,
+					r.model,
+					`${r.effort}${r.shadow ? ", shadow" : ""}`,
+					`${r.reviewed} reviewed: rounds ${mean(r.tally.rounds, r.reviewed)}, ${findingsText({ ...r.tally, first: null })}, ${firsts(r.firstRounds)}; ${per(r.spent, "PR reviewed")}`,
 				]),
 			),
 		);
@@ -1005,7 +1209,7 @@ export function usageLines(report: Usage): string[] {
 					a.harness,
 					a.model,
 					a.effort,
-					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: rounds ${mean(a.tally.rounds, a.reviewed)}, ${findingsText(a.tally)}; ${a.fixes} later fixes; ${a.sessions} sessions, ${tokens(a.spend)}`,
+					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: rounds ${mean(a.tally.rounds, a.reviewed)}, ${findingsText({ ...a.tally, first: null })}, ${firsts(a.firstRounds)}; ${a.fixes} later fixes; ${a.sessions} sessions, ${tokens(a.spend)}`,
 				]),
 			),
 		);

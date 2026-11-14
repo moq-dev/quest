@@ -1471,9 +1471,11 @@ harness, model, and effort, its Reviewer line ending in `, shadow` for the
 shadow, the session and round, the score and rationale, the tier it raised the
 risk to and why, its tally, each finding with
 its location, and the last round's findings with their dispositions. The
-tally, as `- Rounds: 3; findings 4 (high 1, medium 3): fixed 3, refuted 1, open 0`,
-counts the reviewer's rounds on the branch and each finding it raised once,
-by its latest severity, however many rounds keep it open. A finding counts
+tally, as `- Rounds: 3; first round 2 (medium 2); findings 4 (high 1, medium 3): fixed 3, refuted 1, open 0`,
+counts the reviewer's rounds on the branch, its first round's findings as that
+round graded them, and each finding it raised once,
+by its latest severity, however many rounds keep it open. A tally begun before
+it kept first rounds leaves that part out. A finding counts
 for the reviewer that raised it when a new size pick's reviewer fixes or
 refutes it, but one that reviewer keeps open becomes its own, since its round
 reports it again. `--new` drops the findings it leaves unsettled from the
@@ -1591,12 +1593,13 @@ session must also be this repository's, as the repositories token-max resolved
 for it on its own host name, or, once its checkout is deleted, those resolved
 there for another session in that exact directory, as a Codex log records
 (never a parent's, which a nested clone may not share); otherwise it stays
-unattributed. A session on no such branch, such as a sub-agent that never
-switched branches, belongs to its parent's PRs, and a coordinator whose
-sub-agents worked on several PRs belongs to all of them, its cost counting
-equally toward each, so a PR's sessions add up to its whole cost. Each session
-gets the record [`quest records sender`](#session-records) would send, and its
-role comes from it. Each PR shows its `## Models` size, its risk tier and
+unattributed. A session on no such branch, such as a sub-agent in a detached
+checkout, belongs to its parent's PRs unless its own repository is known to be
+another, and a coordinator whose sub-agents worked on several PRs belongs to all
+of them, its cost counting equally toward each, so a PR's sessions add up to its
+whole cost. Each session gets the record
+[`quest records sender`](#session-records) would send, and its role comes from
+it, so a review's sub-agents count as reviewing. Each PR shows its `## Models` size, its risk tier and
 whether a reviewer raised it, and its implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
 `quest review` record names, with its latest round and score and its tally of
 findings across every round, marked `shadow` for the shadow, where a merged PR whose last round left only low
@@ -1623,19 +1626,36 @@ a bot resolving its own thread or a later review leaving it out, and as
 unanswered otherwise.
 
 Rollups follow: spend by size, role, harness, model, and effort; accuracy
-by size and implementer, which sums the tallies but the shadow's, so it counts
+by size and implementer, which sums the tallies but the shadow's, and their
+first rounds over the PRs whose every such tally records one, so it counts
 every finding the routed reviewers caught before merge, while the shadow's
 findings measure an effort step rather than the writer. Since a branch's tallies span every PR from it, only the
 PR whose record holds its latest tally, by the most rounds and then the newest,
 counts them, and a record written before tallies
 counts as unreviewed. An `Implementer:` line's own size, as
-`(iterate, XS)`, counts over the PR's; the writer A/B by size and arm, with
-the same outcomes and every session's spend, counting a sized PR only when
-each of its `Implementer:` lines names the same arm; each risk tier's PRs, how many merged,
-how many a reviewer raised, and how many a later PR's `## Caused by` names,
-which shows whether the tiers predict what breaks; and, over the merged PRs, each online
+`(iterate, XS)`, counts over the PR's. The writer A/B reports by size and arm,
+with the same outcomes and every session's spend, counting a sized PR only when
+each of its `Implementer:` lines names the same arm. Each implementer also carries its
+writing sessions' cost on the merged PRs they were found on, so cost per merged
+PR divides by those PRs, not the ones no host reported: a PR's spend on a
+model goes to its line of that model, of the same effort where both name one,
+and spend on a model no line names, such as a sub-agent on a smaller model,
+to the line that took the most. Spend that fits several lines goes to the
+first line when an implementing session spent it and to the later ones when an
+iterating one did. Local reviewers roll up the same way, by the
+PR's size and each reviewer's harness, model, effort, and shadow mark: PRs
+reviewed, tallies, first rounds, and reviewing cost per PR, where a session
+the record names, or its sub-agent, goes to that reviewer. Spend still left
+fitting several, such as a routed and a shadow reviewer at one effort whose
+sessions no record names, is split evenly among them and reported as `split`.
+Each risk tier's PRs, how many merged,
+how many a reviewer raised, and how many a later PR's `## Caused by` names
+show whether the tiers predict what breaks. Over the merged
+PRs come each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
-answers. Sessions on no PR here, from any
+answers. A hand-back counts only while its draft is open, so a merged PR
+never shows one.
+Sessions on no PR here, from any
 repository or agent token-max reads, total on an `Unattributed` line. `--pr` and
 `--quest` narrow the report to one PR or one quest's branch, and `--json`
 prints it as one object. Without `token-max` on `PATH`, it says how to install

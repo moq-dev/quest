@@ -44,6 +44,8 @@ const reviewerLine = (seat: Pick<Tally, "reviewer" | "model" | "effort" | "shado
 /** A tally's counts, as the record's `Rounds:` line and `quest usage` write them. */
 export interface Counts {
 	rounds: number;
+	/** The first round's findings, null when the tally began before rounds kept them. */
+	first: Tally["findings"] | null;
 	findings: Tally["findings"];
 	fixed: number;
 	refuted: number;
@@ -52,18 +54,24 @@ export interface Counts {
 	open: number;
 }
 
-/** The counts as the record's `Rounds:` line ends, after the rounds, naming only the severities found. */
-export function findingsText(counts: Omit<Counts, "rounds">): string {
-	const total = SEVERITIES.reduce((sum, severity) => sum + counts.findings[severity], 0);
-	const severities = SEVERITIES.filter((severity) => counts.findings[severity] > 0)
-		.map((severity) => `${severity} ${counts.findings[severity]}`)
+/** Findings as their total, then each severity found, such as `3 (high 1, low 2)`. */
+export function severityText(findings: Tally["findings"]): string {
+	const total = SEVERITIES.reduce((sum, severity) => sum + findings[severity], 0);
+	const severities = SEVERITIES.filter((severity) => findings[severity] > 0)
+		.map((severity) => `${severity} ${findings[severity]}`)
 		.join(", ");
-	return `findings ${total}${severities && ` (${severities})`}: fixed ${counts.fixed}, refuted ${counts.refuted}${counts.settled > 0 ? `, settled ${counts.settled}` : ""}, open ${counts.open}`;
+	return `${total}${severities && ` (${severities})`}`;
+}
+
+/** The counts as the record's `Rounds:` line ends, after the rounds. */
+export function findingsText(counts: Omit<Counts, "rounds">): string {
+	return `${counts.first === null ? "" : `first round ${severityText(counts.first)}; `}findings ${severityText(counts.findings)}: fixed ${counts.fixed}, refuted ${counts.refuted}${counts.settled > 0 ? `, settled ${counts.settled}` : ""}, open ${counts.open}`;
 }
 
 /** A tally's counts, where a finding neither fixed nor refuted is open. */
-const counted = (tally: Tally): Counts => ({
+const counted = ({ first, ...tally }: Tally): Counts => ({
 	...tally,
+	first: first ?? null,
 	settled: 0,
 	open: SEVERITIES.reduce((sum, severity) => sum + tally.findings[severity], 0) - tally.fixed - tally.refuted,
 });
@@ -231,27 +239,35 @@ function parseCounts(text: string): Counts | null {
 	const line = /^- Rounds: (.*?)\r?$/m.exec(text);
 	if (!line) return null;
 	const found =
-		/^(\d+); findings (\d+)(?: \(([^)]*)\))?: fixed (\d+), refuted (\d+)(?:, settled (\d+))?, open (\d+)$/.exec(
+		/^(\d+); (?:first round (\d+)(?: \(([^)]*)\))?; )?findings (\d+)(?: \(([^)]*)\))?: fixed (\d+), refuted (\d+)(?:, settled (\d+))?, open (\d+)$/.exec(
 			line[1]!,
 		);
-	if (!found) throw new Error(`the ## Review record's Rounds line is malformed: ${line[1]}`);
-	const findings = { high: 0, medium: 0, low: 0 };
-	for (const part of found[3]?.split(", ") ?? []) {
-		const [severity, count] = part.split(" ");
-		if (!SEVERITIES.includes(severity as keyof typeof findings) || !/^\d+$/.test(count ?? ""))
-			throw new Error(`the ## Review record's Rounds line is malformed: ${line[1]}`);
-		findings[severity as keyof typeof findings] = Number(count);
-	}
+	const malformed = () => new Error(`the ## Review record's Rounds line is malformed: ${line[1]}`);
+	if (!found) throw malformed();
+	// Each severity's count, checked against the total the line states.
+	const severities = (total: string, list: string | undefined) => {
+		const findings = { high: 0, medium: 0, low: 0 };
+		for (const part of list?.split(", ") ?? []) {
+			const [severity, count] = part.split(" ");
+			if (!SEVERITIES.includes(severity as keyof typeof findings) || !/^\d+$/.test(count ?? ""))
+				throw malformed();
+			findings[severity as keyof typeof findings] = Number(count);
+		}
+		if (SEVERITIES.reduce((sum, severity) => sum + findings[severity], 0) !== Number(total))
+			throw new Error(`the ## Review record's Rounds line does not add up: ${line[1]}`);
+		return findings;
+	};
+	const findings = severities(found[4]!, found[5]);
 	const counts = {
 		rounds: Number(found[1]),
+		first: found[2] === undefined ? null : severities(found[2], found[3]),
 		findings,
-		fixed: Number(found[4]),
-		refuted: Number(found[5]),
-		settled: Number(found[6] ?? 0),
-		open: Number(found[7]),
+		fixed: Number(found[6]),
+		refuted: Number(found[7]),
+		settled: Number(found[8] ?? 0),
+		open: Number(found[9]),
 	};
-	const total = SEVERITIES.reduce((sum, severity) => sum + findings[severity], 0);
-	if (total !== Number(found[2]) || counts.fixed + counts.refuted + counts.settled + counts.open !== total)
+	if (counts.fixed + counts.refuted + counts.settled + counts.open !== Number(found[4]))
 		throw new Error(`the ## Review record's Rounds line does not add up: ${line[1]}`);
 	return counts;
 }

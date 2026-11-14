@@ -399,6 +399,24 @@ describe("buildRecords", () => {
 		for (const r of records.values()) expect(parseRecord(JSON.parse(JSON.stringify(r)))).toEqual(r);
 	});
 
+	test("a sub-agent known to be in another repository keeps out of its parent's PR", () => {
+		const parent = session("p");
+		const here = session("h", { parent: "p" });
+		const elsewhere = session("e", { parent: "p" });
+		const records = buildRecords({
+			repository: "acme/proj",
+			sessions: [parent, here, elsewhere],
+			own: new Map([[parent, pull(1, "quest/m0/a", "09:00:00")]]),
+			known: (s) => (s === elsewhere ? ["acme/other"] : s === here ? null : ["acme/proj"]),
+			reviewers: new Set(),
+			classifiers: new Set(),
+			waits: [],
+			since: 0,
+		});
+		expect(records.get(here)!.pulls).toEqual([1]);
+		expect(records.has(elsewhere)).toBe(false);
+	});
+
 	test("without emit, only sessions on a PR get a record", () => {
 		const on = session("on");
 		const off = session("off");
