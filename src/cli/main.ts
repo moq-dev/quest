@@ -1240,8 +1240,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"Other Claude Code sessions, from $CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude), count a turn " +
 				"Claude Code marks as a human's; other Codex sessions, from $CODEX_HOME (or ~/.codex), count the " +
 				"content Codex marks as the user's, outside headless and sub-agent sessions. The repository is the " +
-				"checkout's GitHub origin, else the directory. Output goes to stdout only; nothing is stored or " +
-				"posted. Each answer a person gave an agent's blocking question (Claude Code's AskUserQuestion, " +
+				"checkout's GitHub origin, else the directory. Output goes to stdout only, except a note on stderr " +
+				"naming each Claude Code session whose malformed lines, such as a partial record a crashed write left, " +
+				"were skipped and how many; nothing is stored or posted. Each answer a person gave an agent's blocking question (Claude Code's AskUserQuestion, " +
 				"Codex's request_user_input) prints too, from the harness's own log in every session, T3 Code's " +
 				"included, with the skill the session last ran, the question, the options the agent marked " +
 				"(Recommended), and the ones picked or the words typed instead. --json prints a JSON array of " +
@@ -1253,7 +1254,11 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option("--since <date>", "First local date to print, as YYYY-MM-DD (default: 7 days ago)", date)
 		.option("--json", "Print a JSON array")
 		.action((options: { since?: string; json?: boolean }) => {
-			const found = messages(options.since ?? daysBefore(new Date(), 7), { env: process.env, home: homedir() });
+			const found = messages(options.since ?? daysBefore(new Date(), 7), {
+				env: process.env,
+				home: homedir(),
+				warn,
+			});
 			if (options.json) print(JSON.stringify(found));
 			else for (const line of messageLines(found)) print(line);
 		});
