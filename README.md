@@ -1576,7 +1576,8 @@ quest eval run --harness claude --effort high --pr 570
 
 `add` reads the PR's last head and base from GitHub and records its merge base,
 size, latest writer, and tier, and a culprit already in the set gains each
-further defect. `run` reviews each case at its head in a detached checkout,
+further defect. `run` fetches each case from the set's repository, so a fork's
+clone scores its upstream's set, and reviews it at its head in a detached checkout,
 giving the reviewers the first round `quest review` gives, with the base's
 `AGENTS.md` and `CLAUDE.md` and this checkout's committed `REVIEW.md`. A
 finding on any line of a defect's places finds it; every finding on a clean PR

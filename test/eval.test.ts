@@ -129,7 +129,7 @@ test("tallies count defects found and clean findings per seat, size, and tier, a
 			],
 		},
 	];
-	const { totals, by } = tallies(scored);
+	const { totals, by } = tallies(scored, true);
 	expect(totals.pick).toEqual({ culprits: 1, found: 1, defects: 2, clean: 1, noise: { high: 1, medium: 0, low: 1 } });
 	expect(totals.shadow).toEqual({
 		culprits: 1,
@@ -152,6 +152,13 @@ test("tallies count defects found and clean findings per seat, size, and tier, a
 			.concat(["shadow M", "shadow S", "shadow low", "shadow medium"])
 			.sort(),
 	);
+});
+
+test("either counts a case whose pick has no shadow, and a run of one named reviewer has none", () => {
+	const lone = { pull: 5, ...base, defects: [defect] } as EvalCase;
+	const scored: Scored[] = [{ case: lone, seats: [seat([0], [finding("src/a.ts", 11)])] }];
+	expect(tallies(scored, true).totals.either).toMatchObject({ culprits: 1, found: 1, defects: 1 });
+	expect(tallies(scored, false).totals).toEqual({ pick: expect.objectContaining({ found: 1 }) });
 });
 
 test("the cost sums the run's sessions token-max priced, a lower bound when one is missing or incomplete", () => {
@@ -200,8 +207,21 @@ function onGitHub(repo: string) {
 	// The fixture's commits are pushed, so the eval fetches them as it would a real PR's.
 	git(repo, "branch", "-qD", "other");
 	vi.stubEnv("GH_TOKEN", "token");
+	const info = (login: string, parent: string | null) => ({
+		owner: { login },
+		name: "widget",
+		fork: parent !== null,
+		...(parent === null ? {} : { parent: { owner: { login: parent }, name: "widget" } }),
+		default_branch: "main",
+		clone_url: `https://github.com/${login}/widget.git`,
+		ssh_url: `git@github.com:${login}/widget.git`,
+	});
 	vi.stubGlobal("fetch", async (input: URL) => {
 		const url = new URL(input);
+		if (url.pathname === "/repos/acme/widget") return new Response(JSON.stringify(info("acme", null)));
+		// A contributor's fork, whose parent keeps the quest tree.
+		if (url.pathname === "/repos/me/widget") return new Response(JSON.stringify(info("me", "acme")));
+		if (url.pathname === "/repos/acme/widget/contents/quest/README.md") return new Response("{}");
 		const pull = /^\/repos\/acme\/widget\/pulls\/(\d+)$/.exec(url.pathname)?.[1];
 		if (pull === undefined || heads[pull] === undefined) return new Response("{}", { status: 404 });
 		return new Response(
@@ -213,14 +233,14 @@ function onGitHub(repo: string) {
 			}),
 		);
 	});
-	return heads;
+	return { heads, local };
 }
 
 fakes(
 	"quest eval adds cases from GitHub and scores each reviewer at the case's head, leaving no checkout",
 	async () => {
 		const s = setup(null);
-		const heads = onGitHub(s.repo);
+		const { heads, local } = onGitHub(s.repo);
 		const set = join(s.repo, "review-eval.json");
 
 		const added = await quest(
@@ -257,6 +277,10 @@ fakes(
 		).toMatchObject({
 			code: 2,
 			stderr: `error: src/lib.ts ends at line 1 at ${heads[7]}\n`,
+		});
+		expect(await quest("--root", s.repo, "eval", "add", "6")).toMatchObject({
+			code: 2,
+			stderr: "error: pass either --clean or --defect with --fix and --what\n",
 		});
 		expect(await quest("--root", s.repo, "eval", "add", "6", "--clean")).toMatchObject({
 			code: 2,
@@ -337,5 +361,33 @@ fakes(
 			code: 2,
 			stderr: "error: not in the set: #5\n",
 		});
+
+		// A contributor's clone of a fork, which holds no PR head yet, fetches the set's from the repository it names.
+		const fork = join(s.repo, "..", "fork");
+		git(s.repo, "clone", "-q", "--no-local", local, fork);
+		git(fork, "remote", "set-url", "origin", "https://github.com/me/widget.git");
+		git(fork, "config", "--add", `url.${local}.insteadOf`, "https://github.com/me/widget.git");
+		git(fork, "config", "--add", `url.${local}.insteadOf`, "https://github.com/acme/widget.git");
+		expect(() => git(fork, "cat-file", "-e", heads[7]!)).toThrow();
+		const more = await quest(
+			"--root",
+			fork,
+			"eval",
+			"add",
+			"7",
+			"--set",
+			set,
+			"--defect",
+			"src/lib.ts:1",
+			"--fix",
+			"11",
+			"--what",
+			"Again.",
+		);
+		expect(more.stderr).toBe("");
+		expect(JSON.parse(more.stdout).defects).toHaveLength(3);
+		const scored = await quest("--root", fork, "eval", "run", "--set", set, "--pr", "7", "--json");
+		expect(scored.stderr).toContain("case 1/1: #7");
+		expect(JSON.parse(scored.stdout).totals.pick).toMatchObject({ culprits: 1, found: 3, defects: 3 });
 	},
 );

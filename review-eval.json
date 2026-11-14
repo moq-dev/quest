@@ -417,6 +417,11 @@
 					"what": "After dropping the delegated child cgroup, the `quest gate` and `quest worktree run` help texts still say a gate inside a Quest scope owns its command through a child cgroup and that the scope is delegated.",
 					"at": [
 						{
+							"file": "src/cli/gate.ts",
+							"from": 681,
+							"to": 692
+						},
+						{
 							"file": "src/cli/main.ts",
 							"from": 140,
 							"to": 140

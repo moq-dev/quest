@@ -9,10 +9,11 @@ import { join } from "node:path";
 
 import { SIZES, type Size, TIERS, type Tier } from "../core";
 import { parser } from "../core/parse";
-import { GitHub, type GitHubDependencies, type Repository, object, repositoryPath } from "../github/client";
+import { type GitHub, type Repository, object, repositoryPath } from "../github/client";
 import type { HarnessName } from "./agent";
 import { git } from "./git";
-import { remoteRepository, requireRemote } from "./github";
+import { type ClaimDependencies, upstream } from "./claims";
+import { readRemote, remoteRepository, requireRemote } from "./github";
 import type { Model } from "./models";
 import { recorded } from "./models-record";
 import {
@@ -153,14 +154,26 @@ const writeEvalSet = (path: string, set: EvalSet) =>
 		`${JSON.stringify({ ...set, cases: [...set.cases].sort((a, b) => a.pull - b.pull) }, null, "\t")}\n`,
 	);
 
-/** The GitHub repository `origin` names in `root`, which the set's cases must be PRs of. */
-function originRepository(root: string): Repository {
-	const named = remoteRepository(requireRemote(root, "origin")).repository;
-	if (named === null) throw new ReviewInputError("origin is not on GitHub");
-	return named;
-}
-
 const lower = (repository: Repository) => `${repository.owner}/${repository.repo}`.toLowerCase();
+
+/**
+ * Where `root` fetches `repository`'s commits from: a remote that names it, else its GitHub URL in origin's scheme,
+ * so a contributor's clone of a fork scores the set of the repository it came from.
+ */
+export function source(root: string, repository: string): string {
+	const remotes = git(root, ["remote"]).split("\n").filter(Boolean);
+	const named = (name: string) => {
+		const remote = readRemote(root, name);
+		const found = remote && remoteRepository(remote).repository;
+		return found ? lower(found) : null;
+	};
+	const remote = remotes.find((name) => named(name) === repository);
+	if (remote !== undefined) return remote;
+	const origin = remotes.includes("origin") ? remoteRepository(requireRemote(root, "origin")).url : "";
+	return /^(?:ssh:\/\/|[^@/:]+@)/.test(origin)
+		? `git@github.com:${repository}.git`
+		: `https://github.com/${repository}.git`;
+}
 
 /** Whether `sha` is a commit the clone holds. */
 function holds(root: string, sha: string): boolean {
@@ -172,10 +185,10 @@ function holds(root: string, sha: string): boolean {
 	}
 }
 
-/** Fetch each of `refs` from origin that the clone lacks; GitHub serves a merged PR's head and any reachable commit. */
-function fetch(root: string, refs: string[]): void {
+/** Fetch each of `refs` the clone lacks from `from`; GitHub serves a merged PR's head and any reachable commit. */
+function fetch(root: string, from: string, refs: string[]): void {
 	const missing = refs.filter((ref) => !SHA.test(ref) || !holds(root, ref));
-	if (missing.length > 0) git(root, ["fetch", "--quiet", "--no-tags", "origin", ...missing]);
+	if (missing.length > 0) git(root, ["fetch", "--quiet", "--no-tags", from, ...missing]);
 }
 
 /** What `quest eval add` records. */
@@ -206,27 +219,32 @@ export function defectLines(at: string): Place {
  * PR's last head and base from GitHub, fetches them, and records its merge base, its size and latest writer from its
  * `## Models` record, and its tier as the classifier sets it, which may run a model.
  */
-export async function addCase(options: AddOptions, github: () => GitHubDependencies): Promise<EvalCase> {
+export async function addCase(options: AddOptions, deps: ClaimDependencies): Promise<EvalCase> {
 	const root = git(options.root, ["rev-parse", "--show-toplevel"]);
 	const path = options.set ?? join(root, EVAL_FILE);
-	if (options.clean === (options.defect !== undefined))
+	if (Boolean(options.clean) === (options.defect !== undefined))
 		throw new ReviewInputError("pass either --clean or --defect with --fix and --what");
-	const repository = originRepository(root);
-	const set = readEvalSet(path) ?? { repository: lower(repository), cases: [] };
-	if (set.repository !== lower(repository))
-		throw new ReviewInputError(`${path} holds ${set.repository}'s PRs, but origin is ${lower(repository)}`);
+	// A new set is the repository's that origin's fork chain leads to, as quest start claims there.
+	const up = await upstream(root, requireRemote(root, "origin"), deps);
+	if (up.github === null) throw new ReviewInputError("origin is not on GitHub");
+	const set = readEvalSet(path) ?? { repository: lower(up.github.repository), cases: [] };
+	const [owner, repo] = set.repository.split("/") as [string, string];
+	const repository = { owner, repo };
+	const from = source(root, set.repository);
 	let entry = set.cases.find((each) => each.pull === options.pull);
 	if (entry !== undefined && (options.clean || entry.clean))
 		throw new ReviewInputError(
 			`#${options.pull} is already in the set${entry.clean ? " as clean" : " as a culprit"}`,
 		);
 	if (entry === undefined) {
-		entry = await resolveCase(root, repository, options, github);
+		entry = await resolveCase(root, repository, from, options, up.github.client);
 		if (options.clean) entry.clean = true;
 		set.cases.push(entry);
 	}
 	if (options.defect !== undefined) {
 		const { fix, what, at } = options.defect;
+		// A culprit from the set may be squash-merged, its head in no clone yet.
+		fetch(root, from, [entry.head]);
 		const places = at.map(defectLines);
 		for (const place of places) {
 			const lines = fileLines(root, entry.head, place.file);
@@ -253,10 +271,10 @@ function fileLines(root: string, sha: string, file: string): number {
 async function resolveCase(
 	root: string,
 	repository: Repository,
+	from: string,
 	options: AddOptions,
-	github: () => GitHubDependencies,
+	client: GitHub,
 ): Promise<EvalCase> {
-	const client = new GitHub(github());
 	const response = await client.request(`${repositoryPath(repository)}/pulls/${options.pull}`, { allow: [404] });
 	if (response.status === 404) throw new ReviewInputError(`${lower(repository)} has no PR #${options.pull}`);
 	const row = object(await response.json());
@@ -264,7 +282,7 @@ async function resolveCase(
 	const head = String(object(row.head).sha);
 	const tip = String(object(row.base).sha);
 	const branch = String(object(row.head).ref);
-	fetch(root, [`refs/pull/${options.pull}/head`, tip]);
+	fetch(root, from, [`refs/pull/${options.pull}/head`, tip]);
 	if (!holds(root, head)) throw new ReviewInputError(`origin serves no head ${head} for #${options.pull}`);
 	const base = git(root, ["merge-base", tip, head]);
 	const own = recorded(typeof row.body === "string" ? row.body : "");
@@ -351,7 +369,10 @@ export interface EvalReport {
 	/** The review rules the reviewers were given: the checkout's REVIEW.md at its HEAD, or null without one. */
 	rules: { sha: string } | null;
 	scored: Scored[];
-	/** Each seat over every case: `pick`, `shadow`, and `either`, a defect either found, as a run of both finds it. */
+	/**
+	 * Each seat over every case: `pick`, `shadow`, and, unless `--harness` named one reviewer, `either`, what the
+	 * case's seats found together, as a run of the pick and its shadow finds it.
+	 */
 	totals: Record<string, Tally>;
 	/** Each seat by the case's size and tier, as `pick M` or `shadow high`. */
 	by: Record<string, Tally>;
@@ -385,9 +406,7 @@ export async function evaluate(options: EvalOptions, sessions: (since: Date) => 
 	const path = options.set ?? join(root, EVAL_FILE);
 	const set = readEvalSet(path);
 	if (set === null) throw new ReviewInputError(`no eval set at ${path}; add cases with quest eval add`);
-	const repository = lower(originRepository(root));
-	if (set.repository !== repository)
-		throw new ReviewInputError(`${path} holds ${set.repository}'s PRs, but origin is ${repository}`);
+	const { repository } = set;
 	const unknown = (options.only ?? []).filter((pull) => !set.cases.some((each) => each.pull === pull));
 	if (unknown.length > 0) throw new ReviewInputError(`not in the set: ${unknown.map((n) => `#${n}`).join(", ")}`);
 	const cases = set.cases.filter((each) => options.only === undefined || options.only.includes(each.pull));
@@ -404,6 +423,7 @@ export async function evaluate(options: EvalOptions, sessions: (since: Date) => 
 	const started = new Date();
 	fetch(
 		root,
+		source(root, repository),
 		cases.flatMap((each) => [each.base, each.head]),
 	);
 
@@ -416,7 +436,7 @@ export async function evaluate(options: EvalOptions, sessions: (since: Date) => 
 		repository,
 		rules: rules && { sha: rules.sha },
 		scored,
-		...tallies(scored),
+		...tallies(scored, options.harness === undefined),
 		cost: priced(sessions(started), scored),
 	};
 }
@@ -490,8 +510,11 @@ function count(tally: Tally, entry: EvalCase, found: number[], findings: Finding
 	}
 }
 
-/** The run's tallies: each seat in all, and by size and tier, with `either` for what the pick and shadow found together. */
-export function tallies(scored: Scored[]): Pick<EvalReport, "totals" | "by"> {
+/**
+ * The run's tallies: each seat in all, and by size and tier, with `either` for what a run of the pick and its shadow
+ * found together when `combined`, every case counting, as one whose pick has no shadow.
+ */
+export function tallies(scored: Scored[], combined: boolean): Pick<EvalReport, "totals" | "by"> {
 	const totals: Record<string, Tally> = {};
 	const by: Record<string, Tally> = {};
 	const add = (seat: string, entry: EvalCase, found: number[], findings: Finding[]) => {
@@ -504,7 +527,8 @@ export function tallies(scored: Scored[]): Pick<EvalReport, "totals" | "by"> {
 	};
 	for (const { case: entry, seats } of scored) {
 		for (const seat of seats) add(seat.shadow ? "shadow" : "pick", entry, seat.found, seat.findings);
-		if (seats.length > 1) {
+		// A case whose pick has no shadow, as one at low effort, still counts toward what the run found.
+		if (combined) {
 			const found = [...new Set(seats.flatMap((seat) => seat.found))];
 			// Both seats' findings on a clean PR, as a run of both raises them; the same defect twice is still one.
 			add("either", entry, found, entry.clean ? seats.flatMap((seat) => seat.findings) : []);

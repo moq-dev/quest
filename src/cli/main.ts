@@ -1601,7 +1601,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Review every case of the eval set and score the reviewers")
 		.description(
 			`Review each case of the eval set, ${EVAL_FILE} at the checkout's root unless --set names another, at its PR's ` +
-				"last head, in a detached checkout under the clone's common Git directory that is removed afterwards, and " +
+				"last head, fetched from the set's repository (a remote that names it, else its GitHub URL in origin's " +
+				"scheme, so a fork's clone scores its upstream's set), in a detached checkout under the clone's common Git " +
+				"directory that is removed afterwards, and " +
 				"score the reviewers. A culprit is a PR a later fix named under ## Caused by, with each defect's places, a " +
 				"file's lines at its head; a finding on any of them finds it, and one naming no line finds nothing. A clean " +
 				"PR broke nothing, and every finding on it is noise. Each case gets the first round quest review gives a new " +
@@ -1611,8 +1613,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"avoiding the case's writer, and its shadow, as quest review runs them, or --harness's alone, at its " +
 				"entry's model and effort unless --model and --effort override them. Cases run one at a time, their reviewers " +
 				"at once, and the first failure stops the run and fails it.\n\n" +
-				"Prints the set's counts and rules, a line per seat (pick, shadow, and either, a defect one of them found, " +
-				"as a run of both finds it) with defects found and clean findings by severity, the same by size and tier, " +
+				"Prints the set's counts and rules, a line per seat (pick, shadow, and, without --harness, either: what " +
+				"the case's seats found together, as a run of the pick and its shadow finds it) with defects found and clean findings by severity, the same by size and tier, " +
 				"each case's rounds with score, defects found, findings, tokens the CLI reported, and session, and the " +
 				"run's cost at API list price as token-max prices its sessions, or unpriced without token-max. --json prints " +
 				"one object. Exits as quest review does: 2 for invalid arguments or a set that cannot be read, 3 at a " +
@@ -1664,7 +1666,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.summary("Add a culprit's defect or a clean PR to the eval set")
 		.argument("<pr>", "The merged PR", positiveInteger("<pr>"))
 		.description(
-			"Add a merged PR of origin's repository to the eval set: --clean for one that broke nothing, or --defect with " +
+			"Add a merged PR of the set's repository, or for a new set the one origin's fork chain leads to as quest " +
+				"start finds it, to the eval set: --clean for one that broke nothing, or --defect with " +
 				"--fix and --what for a culprit's defect, which a culprit already in the set gains, repeating --defect for each " +
 				"place the one defect is. Locate a defect at the culprit's last head from the diff of the fix that repaired " +
 				"it. The first time, it reads the PR's last head " +
@@ -1699,7 +1702,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 							given === 3 ? { at: options.defect!, fix: options.fix!, what: options.what! } : undefined,
 						env: process.env,
 					},
-					() => gitHubDependencies(warn),
+					{ github: () => gitHubDependencies(warn), warn },
 				);
 				pending = run.then((entry) => {
 					print(JSON.stringify(entry));
