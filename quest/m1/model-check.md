@@ -54,19 +54,26 @@ checkpoints and outages to count by hand:
   running the check makes the charts itself, from the saved
   `quest usage --since <date> --json` (with `--ssh` for each host that runs
   agents) and the benchmark table below. The charts are an artifact of the
-  run, and no chart code goes into `quest`. It links or embeds them in its
-  PR, and puts every plotted number in the PR body as tables, so a
-  reviewer who cannot open the charts can check them. Each
+  run, and no chart code goes into `quest`. It draws them as Mermaid
+  charts in its PR body, which GitHub renders and any harness can write
+  (user, 2026-11-14, /quest-run on
+  [moq-dev/quest#721](https://github.com/moq-dev/quest/pull/721); rejected:
+  images in a secret gist, a claude.ai page made by hand). Mermaid's
+  quadrant charts scale both axes to 0-1, so each title gives the scales
+  and each point's label carries its PR count. The body also puts every
+  plotted number in tables, so a reviewer can check the charts. Each
   chart names its date range, the command, and each point's PR count.
   Points too thin for the run's variance estimate stay on the chart,
-  hollow and labelled with their count, never dropped. Cells whose
+  marked thin in their label, never dropped. Cells whose
   `Implementer:` effort is `unknown` stay separate points. The charts:
   - Writers, one point per `accuracy` row (size, model, effort): cost per
     merged PR, `spent.cost / spent.pulls`, against each quality measure
     on its own chart. The measures are first-round findings per PR
     (`firstRounds.findings` over `firstRounds.pulls`), review rounds per
     reviewed PR (`tally.rounds / reviewed`), hand-backs per PR
-    (`handedBack / pulls`, which counts only drafts still open), and later
+    (`handedBack / pulls`, which counts only drafts still open until
+    [hand-backs on merged PRs](/quest/m0/routing-evidence/handbacks.md)
+    lands), and later
     `## Caused by` escapes per merged PR (`fixes / merged`).
   - Local reviewers, one point per `reviewers` row (PR size, harness,
     model, effort, shadow): cost per PR reviewed, `spent.cost /
