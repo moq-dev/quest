@@ -1,4 +1,4 @@
-# Every merge reaches every repository that pins quest
+# [S] Every merge reaches every repository that pins quest
 
 ## Goal
 
