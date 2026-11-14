@@ -1,0 +1,201 @@
+// Each session's record, as `quest usage` prints it and the stop hook sends it: its PRs, role, spend, and waits.
+import { type Role, type SessionRecord, type SessionWait, branchQuest } from "../core";
+import { type TranscriptFacts, transcriptFacts } from "./transcript";
+import type { Pull, Session } from "./usage";
+import type { LoggedWait } from "./waits";
+
+/** The role the first quest skill a session ran gives it; a skill not listed gives none. */
+const SKILL_ROLES: Record<string, Role> = {
+	"quest-plan": "planning",
+	"quest-audit": "planning",
+	"quest-recurring": "planning",
+	"quest-import": "planning",
+	"quest-grill": "planning",
+	"quest-delete": "planning",
+	"quest-export": "planning",
+	"quest-start": "implementing",
+	"quest-iterate": "iterating",
+	"quest-review": "reviewing",
+	"quest-merge": "merging",
+	"quest-complete": "merging",
+	"quest-run": "coordinating",
+	"quest-spawn": "coordinating",
+};
+
+/** Branch prefixes of the skills whose PRs plan quests. */
+const PLANNING = ["quest-plan/", "quest-audit/", "quest-recurring/", "quest-import/"];
+
+/** What the records are built from. */
+export interface RecordInput {
+	/** The base repository as lowercase `owner/repo`. */
+	repository: string;
+	/** The sessions to build records for, each once. */
+	sessions: Session[];
+	/** The PR each session's own branch heads, from `attribute`. */
+	own: Map<Session, Pull>;
+	/** Session IDs a PR's review record names. */
+	reviewers: Set<string>;
+	/** The waits logged on this host, which only its own sessions (host null) are given. */
+	waits: LoggedWait[];
+	/** The sessions to build records for; by default, those on a PR. Every session still counts for lineage. */
+	emit?: Set<Session>;
+}
+
+const id = (harness: string, session: string) => `${harness}\0${session}`;
+const iso = (ms: number) => new Date(ms).toISOString();
+
+/**
+ * A record for each session with an ID that `emit` names, or that worked on a PR. A session's PRs are its own, else its parent's, else, for one that spawned
+ * sub-agents, every PR they worked on. Its role is reviewing when Codex marks it a review or a PR's review record
+ * names it, else the one its first quest skill gives, else its parent's unless that is coordinating, else coordinating for a
+ * session whose PRs are only its sub-agents', planning on a planning skill's branch, and implementing or iterating
+ * by whether it started before its PR opened. Transcripts and waits are read only for this host's sessions.
+ */
+export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
+	const named = input.sessions.filter((s): s is Session & { id: string } => s.id !== null);
+	const byId = new Map(named.map((s) => [id(s.harness, s.id), s]));
+	const children = new Map<Session, Session[]>();
+	for (const s of named) {
+		const parent = s.parent === null ? undefined : byId.get(id(s.harness, s.parent));
+		if (parent && parent !== s) children.set(parent, [...(children.get(parent) ?? []), s]);
+	}
+	const parentOf = (s: Session) => (s.parent === null ? undefined : byId.get(id(s.harness, s.parent)));
+
+	const descendants = (s: Session, seen = new Set<Session>()): Pull[] => {
+		seen.add(s);
+		return (children.get(s) ?? []).flatMap((child) => {
+			if (seen.has(child)) return [];
+			const own = input.own.get(child);
+			return own ? [own, ...descendants(child, seen)] : descendants(child, seen);
+		});
+	};
+	// Bounded by the sessions' count, so a cycle in recorded lineage cannot loop.
+	const pullsOf = (s: Session, depth = 0): { pulls: Pull[]; via: "own" | "parent" | "children" | "none" } => {
+		const own = input.own.get(s);
+		if (own) return { pulls: [own], via: "own" };
+		const parent = parentOf(s);
+		if (parent && depth < named.length) {
+			const inherited = pullsOf(parent, depth + 1);
+			if (inherited.pulls.length) return { pulls: inherited.pulls, via: "parent" };
+		}
+		const found = descendants(s);
+		const unique = [...new Map(found.map((p) => [p.number, p])).values()].sort((a, b) => a.number - b.number);
+		return unique.length ? { pulls: unique, via: "children" } : { pulls: [], via: "none" };
+	};
+
+	const facts = new Map<Session, TranscriptFacts>();
+	const factsOf = (s: Session): TranscriptFacts | null => {
+		if (s.host !== null) return null;
+		let found = facts.get(s);
+		if (!found) {
+			found = transcriptFacts(s.harness, s.files);
+			facts.set(s, found);
+		}
+		return found;
+	};
+
+	const roleOf = (s: Session & { id: string }, depth = 0): Role => {
+		if (s.review || input.reviewers.has(s.id)) return "reviewing";
+		const skill = factsOf(s)?.skill;
+		const fromSkill = skill ? SKILL_ROLES[skill] : undefined;
+		if (fromSkill) return fromSkill;
+		const own = input.own.get(s);
+		const parent = parentOf(s);
+		// A sub-agent with no skill of its own works for its parent, unless that parent hands out whole PRs.
+		if (parent?.id && depth < named.length) {
+			const inherited = roleOf(parent as Session & { id: string }, depth + 1);
+			if (inherited !== "coordinating") return inherited;
+		}
+		const branch = own?.branch ?? lastBranch(s);
+		if (branch && PLANNING.some((prefix) => branch.startsWith(prefix))) return "planning";
+		if (!own) return pullsOf(s).via === "children" ? "coordinating" : "implementing";
+		return s.start < own.created ? "implementing" : "iterating";
+	};
+
+	const waits = assignWaits(named, input.waits, parentOf);
+	const records = new Map<Session, SessionRecord>();
+	for (const s of named) {
+		const { pulls, via } = pullsOf(s);
+		if (input.emit ? !input.emit.has(s) : pulls.length === 0) continue;
+		const own = input.own.get(s);
+		const branch = own?.branch ?? (via === "none" ? lastBranch(s) : pulls.length === 1 ? pulls[0]!.branch : null);
+		const local = factsOf(s);
+		const person: SessionWait[] = (local?.questions ?? []).map((q) => ({
+			kind: "person",
+			start: iso(q.start),
+			end: iso(q.end),
+			until: null,
+		}));
+		records.set(s, {
+			harness: s.harness,
+			session: s.id,
+			parent: s.parent,
+			repository: input.repository,
+			branch,
+			quest: branch?.startsWith("quest/") ? branchQuest(branch) : null,
+			pulls: pulls.map((p) => p.number),
+			role: roleOf(s),
+			models: s.models.map((m) => ({
+				model: m.model,
+				effort: m.effort,
+				input: m.input,
+				cacheWrite: m.cacheWrite,
+				cacheRead: m.cacheRead,
+				output: m.output,
+				cost: m.cost,
+				complete: m.complete,
+			})),
+			cost: s.cost,
+			complete: s.complete,
+			start: iso(s.start),
+			end: iso(s.end),
+			waits:
+				local === null
+					? null
+					: [
+							...(waits.get(s) ?? []).map(({ kind, start, end, until }) => ({ kind, start, end, until })),
+							...person,
+						].sort((a, b) => a.start.localeCompare(b.start)),
+		});
+	}
+	return records;
+}
+
+/** The branch a session named last, or null. */
+function lastBranch(s: Session): string | null {
+	return [...s.branches].sort((a, b) => b.last - a.last)[0]?.name ?? null;
+}
+
+/**
+ * Each logged wait's session on this host. A wait names the sessions in its command's environment; where it names
+ * several, as when one harness started the other, the innermost is the one that started last. A Claude sub-agent's
+ * commands carry its parent's ID, so a wait goes to the one sub-agent of it running then in the wait's directory,
+ * the deepest checkout matching, and stays with the parent when none or several match.
+ */
+function assignWaits(
+	sessions: (Session & { id: string })[],
+	logged: LoggedWait[],
+	parentOf: (s: Session) => Session | undefined,
+): Map<Session, LoggedWait[]> {
+	const local = sessions.filter((s) => s.host === null);
+	const byId = new Map(local.map((s) => [id(s.harness, s.id), s]));
+	const assigned = new Map<Session, LoggedWait[]>();
+	for (const wait of logged) {
+		const start = Date.parse(wait.start);
+		const named = wait.sessions.flatMap((n) => byId.get(id(n.harness, n.session)) ?? []);
+		const owner = named.filter((s) => s.start <= start).sort((a, b) => b.start - a.start)[0];
+		if (!owner) continue;
+		const inside = (dir: string | null) =>
+			dir !== null && (wait.directory === dir || wait.directory.startsWith(dir.endsWith("/") ? dir : `${dir}/`));
+		const running = local.filter(
+			(s) =>
+				s.harness === "claude" && parentOf(s) === owner && s.start <= start && start <= s.end && inside(s.cwd),
+		);
+		const depth = Math.max(-1, ...running.map((s) => s.cwd!.length));
+		const deepest = running.filter((s) => s.cwd!.length === depth);
+		// A parent waits on its foreground sub-agent, so the one sub-agent running there is the waiter.
+		const target = deepest.length === 1 ? deepest[0]! : owner;
+		assigned.set(target, [...(assigned.get(target) ?? []), wait]);
+	}
+	return assigned;
+}

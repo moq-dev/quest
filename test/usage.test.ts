@@ -9,6 +9,7 @@ import { fixes } from "../src/cli/land-fixer";
 import type { Round, Tally } from "../src/cli/review";
 import { parseReview, reviewRecord } from "../src/cli/review-record";
 import { type Session, causes, fold, parseSessions, usage, usageLines } from "../src/cli/usage";
+import type { LoggedWait } from "../src/cli/waits";
 import { tempDir } from "./fixture";
 
 const THREAD = "01a1b8e8-8fca-7793-99d1-062f41f8a7b0";
@@ -58,7 +59,7 @@ const exported = (session: string, model: string, effort: string, cost: number, 
 	costUsd: cost,
 	complete: true,
 	skippedLines: 0,
-	files: ["/home/me/.claude/projects/-work/x.jsonl"],
+	files: [],
 	...extra,
 });
 
@@ -76,6 +77,7 @@ describe("parseSessions", () => {
 			host: "box",
 			harness: "codex",
 			id: THREAD,
+			parent: null,
 			review: false,
 			cwd: WORK,
 			repositories: ["acme/proj"],
@@ -87,6 +89,7 @@ describe("parseSessions", () => {
 				},
 			],
 			start: Date.parse("2026-11-06T10:05:00Z"),
+			end: Date.parse("2026-11-06T10:06:00Z"),
 			models: [
 				{
 					model: "gpt-6.1-sol",
@@ -102,6 +105,7 @@ describe("parseSessions", () => {
 			cost: 0.5,
 			complete: true,
 			skippedLines: 0,
+			files: [],
 		});
 		// A session token-max could not resolve a repository, model, or ID for keeps the gap as null.
 		const [unknown] = parse({
@@ -635,7 +639,7 @@ describe("usage", () => {
 			return new Response("not found", { status: 404 });
 		};
 		const calls: [Date, string[]][] = [];
-		const deps = (exported: Session[] | null) => ({
+		const deps = (exported: Session[] | null, waits: LoggedWait[] = []) => ({
 			github: () => ({
 				fetch: fetch as typeof globalThis.fetch,
 				now: Date.now,
@@ -648,6 +652,7 @@ describe("usage", () => {
 				calls.push([since, ssh]);
 				return exported;
 			},
+			waits: () => waits,
 		});
 		return { root, deps, sessions, calls, requests };
 	}

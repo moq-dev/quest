@@ -14,6 +14,7 @@ import { type StopInput, broken, questRoot, runningGates, usesQuest } from "./ru
 import { stubFindings } from "./setup";
 import { CONTEXT } from "./skills";
 import { HOOK_EVENTS } from "./worktree-hook";
+import { queue, startSender } from "./send";
 
 /** The command the rule hooks run. */
 export const HOOK_COMMAND = "quest hook";
@@ -44,7 +45,8 @@ const SESSION = "startup|resume|clear|compact";
  * rules; SubagentStart gives each subagent the same rules, since it starts
  * without the session's. PreToolUse blocks the calls that break a rule a
  * program can check. Stop and SubagentStop refuse to end a turn while a gate
- * the agent started still runs in the background.
+ * the agent started still runs in the background; once a session's turn ends,
+ * Stop queues its record to send.
  */
 export const CLAUDE_HOOKS: readonly HookEntry[] = [
 	{ event: "SessionStart", matcher: SESSION },
@@ -62,6 +64,7 @@ export const CLAUDE_HOOKS: readonly HookEntry[] = [
 export const CODEX_HOOKS: readonly HookEntry[] = [
 	{ event: "SessionStart", matcher: SESSION, settings: { additionalContextLimit: CONTEXT_LIMIT } },
 	{ event: "PreToolUse", matcher: "Bash|apply_patch" },
+	{ event: "Stop" },
 ];
 
 /**
@@ -273,6 +276,17 @@ interface HookInput {
 	cwd: string;
 	tool_name?: string;
 	tool_input?: Record<string, unknown>;
+	session_id?: string;
+	transcript_path?: string;
+	/** Codex's Stop names its turn; Claude Code's does not. */
+	turn_id?: string;
+}
+
+/** What `hook` reads and starts beyond its input. */
+export interface HookDependencies {
+	env: NodeJS.ProcessEnv;
+	/** Start a background sender for the records queued. */
+	send(env: NodeJS.ProcessEnv): void;
 }
 
 /** What a Stop or SubagentStop refusal tells the agent, after the gates it names. */
@@ -288,7 +302,7 @@ const BLOCK_ON_GATES =
  * rule as the reason. Stop and SubagentStop refuse to end the turn while a gate
  * the agent started runs in the background (see `runningGates`).
  */
-export function hook(input: unknown): string {
+export function hook(input: unknown, deps: HookDependencies = { env: process.env, send: startSender }): string {
 	const value = input as Partial<HookInput> | null;
 	if (typeof value?.hook_event_name !== "string" || typeof value.cwd !== "string")
 		throw new Error("expected a Claude Code hook's JSON input with hook_event_name and cwd");
@@ -326,10 +340,17 @@ export function hook(input: unknown): string {
 		}
 		case "Stop":
 		case "SubagentStop": {
+			// Codex runs no background gates, so its Stop only queues the record.
+			if (
+				event === "Stop" &&
+				typeof value.turn_id === "string" &&
+				!Array.isArray((value as StopInput).background_tasks)
+			)
+				return stopped(value, "codex", deps);
 			if (!Array.isArray((value as StopInput).background_tasks))
 				throw new Error(`expected a ${event} hook's JSON input with background_tasks; upgrade Claude Code`);
 			const gates = runningGates(value as StopInput);
-			if (gates.length === 0) return "";
+			if (gates.length === 0) return event === "Stop" ? stopped(value, "claude", deps) : "";
 			const named = gates.map((command) => `- ${command}`).join("\n");
 			return JSON.stringify({
 				decision: "block",
@@ -339,4 +360,27 @@ export function hook(input: unknown): string {
 		default:
 			throw new Error(`quest hook does not handle ${event}; run \`quest setup\` again to update your hooks`);
 	}
+}
+
+/**
+ * Queue the record of the session whose turn ended, and start a sender when one is queued. A Claude Code sub-agent
+ * is sent with its parent. Says what the person has not seen yet: why nothing is sent, or a sender's failure.
+ */
+function stopped(value: Partial<HookInput>, harness: string, deps: HookDependencies): string {
+	if (typeof value.session_id !== "string" || typeof value.transcript_path !== "string")
+		throw new Error(`expected a Stop hook's JSON input with session_id and transcript_path`);
+	let notices: string[];
+	try {
+		const queued = queue(
+			{ harness, session: value.session_id, transcript: value.transcript_path, cwd: value.cwd! },
+			deps.env,
+		);
+		if (queued.send) deps.send(deps.env);
+		notices = queued.notices;
+	} catch (error) {
+		notices = [
+			`quest: cannot queue this session's record: ${error instanceof Error ? error.message : String(error)}`,
+		];
+	}
+	return notices.length ? JSON.stringify({ systemMessage: notices.join("\n") }) : "";
 }

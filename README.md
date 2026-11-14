@@ -1505,10 +1505,12 @@ session must also be this repository's, as the repositories token-max resolved
 for it on its own host name, or, once its checkout is deleted, those resolved
 there for another session in that exact directory, as a Codex log records
 (never a parent's, which a nested clone may not share); otherwise it stays
-unattributed. A session is reviewing when the PR's `## Review` record names
-it or Codex marks it a review, implementing when its first request since
-`--since` came before the PR opened, and iterating otherwise, so a session
-that opened a PR before `--since` and kept working on it reads as iterating. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
+unattributed. A session on no such branch, such as a sub-agent that never
+switched branches, belongs to its parent's PRs, and a coordinator whose
+sub-agents worked on several PRs belongs to all of them, its cost counting
+equally toward each, so a PR's sessions add up to its whole cost. Each session
+gets the record [`quest records send`](#session-records) would send, and its
+role comes from it. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
 `quest review` record names, with its latest round and score and its tally of
 findings across every round, marked `shadow` for the shadow, where a merged PR whose last round left only low
 findings open counts them settled, since `/quest-review` fixes or refutes those
@@ -1546,7 +1548,8 @@ answers. Sessions on no PR here, from any
 repository or agent token-max reads, total on an `Unattributed` line. `--pr` and
 `--quest` narrow the report to one PR or one quest's branch, and `--json`
 prints it as one object. Without `token-max` on `PATH`, it says how to install
-it and reports the PRs' records alone.
+it and reports the PRs' records alone. Each PR's `waits:` line sums its
+sessions' waits by kind, a shared session's in its share.
 
 `--ssh HOST`, repeatable, also reads that SSH destination's sessions through
 the token-max installed there, matching each through the repositories resolved
@@ -1558,6 +1561,81 @@ token-max could not price, or a transcript line it could not read or that was
 unfinished, is listed under `Lower bounds` with its unreadable lines, and every
 cost it reaches reads `or more`. The land fixer's container keeps no session log, so
 its fixes show without tokens.
+
+### Session records
+
+When an agent session's turn ends in a checkout that uses Quest, `quest`
+sends Kixel Code one record of it, rebuilt each time, so a resend replaces
+the last and the store follows the session as it grows. The type is
+`SessionRecord`, exported from `quest/core` with `parseRecord` and
+`parseUpload`, which refuse a malformed record whole:
+
+```json
+{"harness":"claude","session":"7ef44bda-...","parent":null,"repository":"moq-dev/quest","branch":"quest/m0/benchmark/records","quest":"quest/m0/benchmark/records.md","pulls":[718],"role":"implementing","models":[{"model":"claude-opus-5-5","effort":"high","input":230,"cacheWrite":211500,"cacheRead":15800000,"output":88800,"cost":6.64,"complete":true}],"cost":6.64,"complete":true,"start":"2026-11-14T00:06:12.270Z","end":"2026-11-14T00:31:40.120Z","waits":[{"kind":"gate-queue","start":"2026-11-14T00:22:07.386Z","end":"2026-11-14T00:22:07.402Z","until":null}]}
+```
+
+- `pulls` are the PRs it worked on, attributed as `quest usage` attributes
+  them; a session with none yet, such as planning before its PR opens, keeps
+  its `branch`, and the next record names the PR.
+- `role` is reviewing when a PR's `## Review` record names it or Codex marks
+  it a review, else the one the first quest skill it ran gives: planning
+  (`/quest-plan`, `/quest-audit`, `/quest-recurring`, `/quest-import`,
+  `/quest-grill`, `/quest-delete`, `/quest-export`), implementing
+  (`/quest-start`), iterating (`/quest-iterate`), reviewing (`/quest-review`),
+  merging (`/quest-merge`, `/quest-complete`), or coordinating (`/quest-run`,
+  `/quest-spawn`). Without one, a sub-agent takes its parent's role unless that
+  is coordinating; a session on its sub-agents' PRs only is coordinating; one
+  on a `quest-plan/`, `quest-audit/`, `quest-recurring/`, or `quest-import/`
+  branch is planning; and the rest are implementing when their first request
+  came before the PR opened, else iterating.
+- `waits` holds each wait a tool timed: `gate-queue` and `gate-run` for an
+  outermost `quest gate`, `pull` for `quest wait` with the first activity it
+  printed as `until` (null on timeout), `merge-queue` for a `quest wait` that
+  ended on `merged` or `removed_from_merge_queue`, and `person` from a blocking
+  question, such as `AskUserQuestion` or `request_user_input`, to its answer.
+  `quest gate` and `quest wait` log theirs under
+  `$XDG_STATE_HOME/quest/waits` (`~/.local/state`), one file per day kept 90
+  days, whenever `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID` names the
+  session; a Claude sub-agent's commands carry its parent's ID, so a wait goes
+  to the one sub-agent of it running then in the wait's directory. Waits may
+  overlap, as parallel gates do. `null` means they could not be read, as for a
+  session on another host in `quest usage --ssh`.
+
+The record holds no prompt, reply, or transcript text: skills and questions
+are read from the transcript on this host, and only their names and times
+leave it.
+
+A checkout names its endpoint in a committed `.quest.json`:
+
+```json
+{ "records": "https://kixel.example/records" }
+```
+
+and each user pairs a token with it in `$XDG_CONFIG_HOME/quest/records.json`
+(`~/.config`), so a checkout naming another endpoint, as a hostile branch
+might, is never sent the token or a record:
+
+```json
+{ "https://kixel.example/records": "token" }
+```
+
+The endpoint must be HTTPS, or HTTP to `localhost`. A checkout naming none, or
+an endpoint the user holds no token for, sends nothing, and the hook says so
+once as a system message.
+
+The `Stop` hook [`quest setup`](#configure-your-agent) installs for Claude Code
+and Codex queues the session under `$XDG_STATE_HOME/quest/records` and starts
+`quest records send --background` detached at low priority. The sender runs
+token-max on this host from the earliest queued session's first instant,
+reads the PRs updated since then, and posts `{"records": [...]}` with
+`Authorization: Bearer <token>`, one upload per endpoint and repository, each
+queued session with its sub-agents, which stop without the hook naming them.
+A 2xx drops the sessions from the queue, unless the hook queued one again
+meanwhile. A 401 or 403 drops them and sends that endpoint nothing more until
+the token changes. Any other failure, token-max missing included, keeps them
+for the next run, and the next stop says so once. While one sender runs,
+another leaves the queue to it, and it runs again once done. `quest records
+send` runs the same in the foreground.
 
 ### Typed messages
 
@@ -1932,7 +2010,9 @@ background commands when it ends, and a session that ends its turn on one
 leaves its result unread. A command is the agent's when its transcript holds
 the ID Claude Code gave it on backgrounding it, so a sibling's gate does not
 hold an agent. Claude Code lists a command only while it runs, so the
-refusal ends with the gate. Codex runs no such hook.
+refusal ends with the gate. Codex runs no such hook. Once the turn can end,
+Claude Code's and Codex's `Stop` hooks queue the session's
+[record](#session-records).
 
 `quest` must be on the `PATH` the agent starts with, as for the worktree `--body`, a `body=` field,
 `git commit -m`, `--body-file -` with a here-document, or a body file. A file

@@ -24,6 +24,7 @@ import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
 import { stubbed } from "./job";
+import { envSessions, logWait } from "./waits";
 import { questScope, scopeGroup, startTime, systemdScopes } from "./supervise";
 
 /**
@@ -921,9 +922,11 @@ interface Observed {
 export async function gate(command: string[], options: GateOptions = {}): Promise<number> {
 	const outermost = process.env[ADMITTED] !== "1";
 	const record = outermost ? recordFile(process.env) : undefined;
+	// An outermost gate in an agent session logs its waits for the session's record.
+	const waits = outermost && envSessions().length > 0;
 	const started = Date.now();
 	// Read now: the command may remove its own directory.
-	const directory = record ? process.cwd() : "";
+	const directory = record || waits ? process.cwd() : "";
 	const cancel = interrupts();
 	const observed: Observed = {};
 	try {
@@ -935,6 +938,30 @@ export async function gate(command: string[], options: GateOptions = {}): Promis
 			failure = error;
 			// The status the CLI exits with for a gate's own failure.
 			status = 1;
+		}
+		if (waits) {
+			const ended = Date.now();
+			const iso = (ms: number) => new Date(ms).toISOString();
+			try {
+				// A run cancelled before admission waited in the queue until it ended.
+				const admitted = observed.admitted ?? ended;
+				logWait(
+					{ kind: "gate-queue", start: iso(started), end: iso(admitted), until: null },
+					{ cwd: directory },
+				);
+				if (observed.admitted !== undefined)
+					logWait(
+						{ kind: "gate-run", start: iso(admitted), end: iso(ended), until: null },
+						{ cwd: directory },
+					);
+			} catch (error) {
+				// A cancelled run exits as it would have, logged or not.
+				if (cancel.signal.aborted) process.stderr.write(`quest gate: ${message(error)}\n`);
+				else {
+					failure = failure === undefined ? error : new Error(`${message(failure)}; ${message(error)}`);
+					status = 1;
+				}
+			}
 		}
 		if (!record) {
 			if (failure !== undefined) throw failure;
