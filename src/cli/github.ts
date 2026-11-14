@@ -114,7 +114,7 @@ export function remoteRepository(remote: Remote, push = false): { url: string; r
  */
 export function githubRepository(url: string): Repository | null {
 	const match =
-		/^(?:https:\/\/(?:[^@/]+@)?github\.com\/|ssh:\/\/(?:[^@/]+@)?github\.com(?::\d+)?\/|[^@/:]+@github\.com:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(
+		/^(?:https:\/\/(?:[^@/]+@)?github\.com\/|ssh:\/\/(?:[^@/]+@)?github\.com(?::\d+)?\/|(?:[^@/:]+@)?github\.com:)([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(
 			url,
 		);
 	return match ? { owner: match[1], repo: match[2] } : null;

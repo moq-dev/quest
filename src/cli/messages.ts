@@ -3,12 +3,66 @@
 // drives, Claude Code's `origin` for the rest of its sessions, and Codex's content provenance for its interactive ones.
 // Answers come from each harness's own log, which keeps the question's options. Output goes to stdout only.
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { discoveryEnv } from "./git";
 import { githubRepository } from "./github";
-import { claudeLogs, eachLine, parseLine } from "./usage";
+
+/**
+ * Visit each line of the file at `path`, reading it in bounded chunks since logs reach gigabytes. The last line is
+ * marked incomplete when no newline ends it, as while its session is still writing it. Reading stops once `visit`
+ * returns false.
+ */
+function eachLine(path: string, visit: (line: string, complete: boolean) => boolean | void): void {
+	const fd = openSync(path, "r");
+	try {
+		const chunk = Buffer.alloc(1 << 22);
+		let rest = Buffer.alloc(0);
+		for (let read = readSync(fd, chunk); read > 0; read = readSync(fd, chunk)) {
+			const data = rest.length ? Buffer.concat([rest, chunk.subarray(0, read)]) : chunk.subarray(0, read);
+			let start = 0;
+			for (let end = data.indexOf(10); end >= 0; end = data.indexOf(10, start)) {
+				if (end > start && visit(data.toString("utf8", start, end), true) === false) return;
+				start = end + 1;
+			}
+			rest = Buffer.from(data.subarray(start));
+		}
+		if (rest.length) visit(rest.toString("utf8"), false);
+	} finally {
+		closeSync(fd);
+	}
+}
+
+/** One JSON record of a log line, or null for an incomplete last line. */
+function parseLine(path: string, line: string, complete: boolean): Record<string, unknown> | null {
+	try {
+		return JSON.parse(line) as Record<string, unknown>;
+	} catch (error) {
+		if (!complete) return null;
+		throw new Error(`${path} has a line that is not JSON: ${(error as Error).message}`);
+	}
+}
+
+/** Claude Code's session logs by session ID, from each config directory Claude Code uses, once each. */
+function claudeLogs(deps: { env: NodeJS.ProcessEnv; home: string }): Map<string, string> {
+	const configured = deps.env.CLAUDE_CONFIG_DIR?.split(",")
+		.map((dir) => dir.trim())
+		.filter(Boolean);
+	const dirs = configured?.length ? configured : [join(deps.home, ".config", "claude"), join(deps.home, ".claude")];
+	const logs = new Map<string, string>();
+	for (const dir of dirs) {
+		const projects = join(dir, "projects");
+		if (!existsSync(projects)) continue;
+		for (const project of readdirSync(projects, { withFileTypes: true })) {
+			if (!project.isDirectory()) continue;
+			for (const file of readdirSync(join(projects, project.name)))
+				if (file.endsWith(".jsonl") && !logs.has(file.slice(0, -6)))
+					logs.set(file.slice(0, -6), join(projects, project.name, file));
+		}
+	}
+	return logs;
+}
 
 /** One message a person typed. */
 export interface Message {

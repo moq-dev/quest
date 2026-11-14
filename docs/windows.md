@@ -11,9 +11,8 @@ Bun requires [Windows 10 version 1809 or later](https://bun.sh/docs/installation
 and an x64 processor with SSE4.2; ARM64 uses its native build. The release and
 core/lifecycle CI use [Windows Server 2022 x64 and Windows 11 ARM64 runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 
-This change adds Windows artifacts to the next release containing it. Existing
-releases such as v0.1.0 do not contain them. Choose an actual published tag
-with the matching ZIP before installing. See the [release list](https://github.com/moq-dev/quest/releases).
+Releases from v0.3.0 on ship the Windows ZIPs; v0.1.0 does not. See the
+[release list](https://github.com/moq-dev/quest/releases).
 
 ## Install
 

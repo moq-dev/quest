@@ -60,7 +60,10 @@ export interface BumpConnection {
 
 export interface BumpContext {
 	source: Repository;
-	targets: Repository[];
+	/** Every App installation's API access, reading all of its repositories, from which a pass finds its targets. */
+	installations: () => Promise<GitHubDependencies[]>;
+	/** The targets found for the base commit last bumped, so discovery reruns only once the base moves. */
+	discovered?: { sha: string; targets: Repository[] };
 	state: string;
 	connect: (target: Repository) => BumpConnection;
 	/** A read-only token for the source, which the tools fetch from GitHub. */
@@ -84,11 +87,11 @@ const PASSING = ["success", "neutral", "skipped"];
 
 const name = (repository: Repository) => `${repository.owner}/${repository.repo}`;
 
-/** The root input of `lock` that locks `source` on GitHub, and its locked and URL-pinned revisions. */
-export function questInput(lock: ObjectValue, source: Repository): { input: string; locked: string; pinned?: string } {
+/** Every root input of `lock` that locks `source` on GitHub, and its locked and URL-pinned revisions. */
+function questInputs(lock: ObjectValue, source: Repository): { input: string; locked: string; pinned?: string }[] {
 	const nodes = object(lock.nodes);
 	const inputs = object(object(nodes[string(lock.root)]).inputs ?? {});
-	const matches = Object.entries(inputs).flatMap(([input, node]) => {
+	return Object.entries(inputs).flatMap(([input, node]) => {
 		// A follows path names another node's input, not a lock of its own.
 		if (typeof node !== "string") return [];
 		const entry = object(nodes[node]);
@@ -105,11 +108,86 @@ export function questInput(lock: ObjectValue, source: Repository): { input: stri
 			},
 		];
 	});
+}
+
+/** The root input of `lock` that locks `source` on GitHub, and its locked and URL-pinned revisions. */
+export function questInput(lock: ObjectValue, source: Repository): { input: string; locked: string; pinned?: string } {
+	const matches = questInputs(lock, source);
 	if (matches.length !== 1)
 		throw new Error(
 			`flake.lock has ${matches.length} root inputs locking github:${name(source)}, where a bump needs exactly one`,
 		);
 	return matches[0];
+}
+
+/**
+ * The repositories, other than the source, across every installation whose default branch's `flake.lock`
+ * locks the source through exactly one root input. Only the lock is read; nothing is cloned. A repository
+ * locking it through several inputs, or whose lock cannot be decoded, is reported in `output` and skipped. A failed
+ * request, for one repository's lock or an installation's token or listing, is recorded in `failures`, and
+ * the rest are still searched.
+ */
+export async function discoverTargets(
+	source: Repository,
+	installations: GitHubDependencies[],
+	output: string[],
+	failures: string[],
+): Promise<Repository[]> {
+	const targets: Repository[] = [];
+	for (const [index, deps] of installations.entries()) {
+		const github = new GitHub(deps);
+		try {
+			for (let page = 1; ; page++) {
+				const listed = object(
+					await (await github.request(`/installation/repositories?per_page=100&page=${page}`)).json(),
+				);
+				const rows = array(listed.repositories);
+				for (const row of rows) {
+					const owner = string(object(row.owner).login);
+					const repo = string(row.name);
+					const target = { owner, repo };
+					if (row.archived === true || name(target).toLowerCase() === name(source).toLowerCase()) continue;
+					let response: Response;
+					try {
+						response = await github.request(`/repos/${owner}/${repo}/contents/flake.lock`, {
+							allow: [404],
+						});
+					} catch (error) {
+						// A failed request may be transient, so it leaves discovery incomplete and retried.
+						failures.push(
+							`discovery of ${name(target)}: ${error instanceof Error ? error.message : String(error)}`,
+						);
+						continue;
+					}
+					if (response.status === 404) continue;
+					let found: number;
+					try {
+						const content = string(object(await response.json()).content);
+						found = questInputs(
+							object(JSON.parse(Buffer.from(content, "base64").toString("utf8"))),
+							source,
+						).length;
+					} catch (error) {
+						output.push(
+							`bump skips ${name(target)}: its flake.lock cannot be read: ${error instanceof Error ? error.message : String(error)}`,
+						);
+						continue;
+					}
+					if (found === 1) targets.push(target);
+					else if (found > 1)
+						output.push(
+							`bump skips ${name(target)}: flake.lock locks github:${name(source)} through ${found} root inputs`,
+						);
+				}
+				if (rows.length < 100) break;
+			}
+		} catch (error) {
+			failures.push(
+				`discovery in installation ${index + 1}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+	return targets;
 }
 
 /**
@@ -206,7 +284,14 @@ export async function bumpPass(context: BumpContext, sha: string): Promise<strin
 	const bumps = readBumps(context.state);
 	const output: string[] = [];
 	const failures: string[] = [];
-	for (const target of context.targets) {
+	let targets = context.discovered?.sha === sha ? context.discovered.targets : undefined;
+	if (!targets) {
+		const missed = failures.length;
+		targets = await discoverTargets(context.source, await context.installations(), output, failures);
+		// A partial discovery is not cached, so the next pass searches the failed installations again.
+		context.discovered = failures.length === missed ? { sha, targets } : undefined;
+	}
+	for (const target of targets) {
 		const key = name(target);
 		if (bumps[key]?.sha === sha && bumps[key].status !== "checking") continue;
 		try {

@@ -15,6 +15,7 @@ import {
 	type BumpTools,
 	bumpBody,
 	bumpPass,
+	discoverTargets,
 	hostTools,
 	latestRuns,
 	questInput,
@@ -129,12 +130,18 @@ function deps(world: World): GitHubDependencies {
 				if (mutation === "markPullRequestReadyForReview") pull.draft = false;
 				return json({ data: {} });
 			}
+			if (url.pathname === "/installation/repositories")
+				return json({ repositories: [{ owner: { login: world.target.owner }, name: world.target.repo }] });
 			if (url.pathname === path) return json({ default_branch: "main", allow_auto_merge: world.allowAutoMerge });
 			if (url.pathname === `${path}/git/ref/heads/main`) return json({ object: { sha: world.base } });
 			if (url.pathname === `${path}/contents/flake.lock`) {
 				const text =
 					world.lock ??
-					git(world.remote.slice("file://".length), "show", `${url.searchParams.get("ref")}:flake.lock`);
+					git(
+						world.remote.slice("file://".length),
+						"show",
+						`${url.searchParams.get("ref") ?? "main"}:flake.lock`,
+					);
 				return json({ content: Buffer.from(text).toString("base64") });
 			}
 			if (url.pathname === `${path}/actions/runs`) {
@@ -215,7 +222,7 @@ function tools(findings?: string): BumpTools & { locks: string[] } {
 function context(world: World, faked = tools()): BumpContext {
 	return {
 		source: SOURCE,
-		targets: [world.target],
+		installations: async () => [deps(world)],
 		state: tempDir(),
 		reader: async () => "reader",
 		tools: faked,
@@ -589,7 +596,7 @@ describe("bumpPass", () => {
 		});
 		const good = world();
 		const ctx = context(good);
-		ctx.targets = [broken.target, good.target];
+		ctx.discovered = { sha: NEW, targets: [broken.target, good.target] };
 		ctx.connect = (target) =>
 			target.repo === "broken"
 				? { remote: broken.remote, deps: deps(broken), token: async () => "push", read: readRemote }
@@ -599,5 +606,120 @@ describe("bumpPass", () => {
 		expect(JSON.parse(readFileSync(join(ctx.state, "bump.json"), "utf8"))).toEqual({
 			"moq-dev/widget": { sha: NEW, pr: 7, head: git(bare(good), "rev-parse", BUMP_BRANCH), status: "done" },
 		});
+	});
+});
+
+describe("discoverTargets", () => {
+	/** An installation listing `repositories`, each serving its flake.lock, or none when undefined. */
+	function installation(repositories: Record<string, string | undefined>, requests: string[]): GitHubDependencies {
+		return {
+			token: "test",
+			now: () => 0,
+			sleep: async () => {},
+			warn: () => {},
+			fetch: (async (input: URL) => {
+				const url = new URL(input);
+				requests.push(`${url.pathname}${url.search}`);
+				if (url.pathname === "/installation/repositories")
+					return Response.json({
+						repositories: Object.keys(repositories).map((key) => {
+							const [owner, name] = key.split("/");
+							return { owner: { login: owner }, name };
+						}),
+					});
+				const lock = /^\/repos\/([^/]+\/[^/]+)\/contents\/flake.lock$/.exec(url.pathname);
+				if (lock && repositories[lock[1]] === "forbidden")
+					return Response.json({ message: "Forbidden" }, { status: 403 });
+				if (lock && repositories[lock[1]] !== undefined)
+					return Response.json({ content: Buffer.from(repositories[lock[1]]!).toString("base64") });
+				if (lock) return Response.json({ message: "Not Found" }, { status: 404 });
+				throw new Error(`unexpected request ${url.pathname}`);
+			}) as typeof fetch,
+		};
+	}
+
+	test("keeps the repositories locking the source once, across installations, skipping the source", async () => {
+		const requests: string[] = [];
+		const twice = lockFile(OLD, false).replace('"follows": [', '"again": "quest_2",\n        "follows": [');
+		const output: string[] = [];
+		const targets = await discoverTargets(
+			SOURCE,
+			[
+				installation(
+					{
+						"moq-dev/widget": lockFile(OLD, false),
+						"moq-dev/quest": lockFile(OLD, false),
+						"moq-dev/plain": undefined,
+						"moq-dev/broken": "{}",
+						"moq-dev/other": lockFile(OLD, false).replace(/moq-dev/g, "other"),
+					},
+					requests,
+				),
+				installation({ "kixelated/twice": twice, "kixelated/gadget": lockFile(OLD, true) }, requests),
+			],
+			output,
+			[],
+		);
+		expect(targets).toEqual([
+			{ owner: "moq-dev", repo: "widget" },
+			{ owner: "kixelated", repo: "gadget" },
+		]);
+		expect(output).toEqual([
+			"bump skips moq-dev/broken: its flake.lock cannot be read: invalid GitHub response: expected an object",
+			"bump skips kixelated/twice: flake.lock locks github:moq-dev/quest through 2 root inputs",
+		]);
+		expect(requests).not.toContain("/repos/moq-dev/quest/contents/flake.lock");
+	});
+
+	test("an unreadable repository or a failing installation does not stop the others", async () => {
+		const failing: GitHubDependencies = {
+			...installation({}, []),
+			fetch: (async () => Response.json({ message: "Forbidden" }, { status: 403 })) as typeof fetch,
+		};
+		const output: string[] = [];
+		const failures: string[] = [];
+		const targets = await discoverTargets(
+			SOURCE,
+			[failing, installation({ "moq-dev/locked": "forbidden", "moq-dev/widget": lockFile(OLD, false) }, [])],
+			output,
+			failures,
+		);
+		expect(targets).toEqual([{ owner: "moq-dev", repo: "widget" }]);
+		expect(output).toEqual([]);
+		expect(failures).toHaveLength(2);
+		expect(failures[0]).toMatch(/^discovery in installation 1:/);
+		expect(failures[1]).toMatch(/^discovery of moq-dev\/locked:/);
+	});
+});
+
+describe("bumpPass discovery", () => {
+	test("never clones a repository that does not lock the source", async () => {
+		const plain = world({ lock: lockFile(OLD, false).replace(/moq-dev/g, "other") });
+		const ctx = context(plain);
+		ctx.connect = () => {
+			throw new Error("connected to a repository that is no target");
+		};
+		await expect(bumpPass(ctx, NEW)).resolves.toEqual([]);
+		expect(plain.pulls).toHaveLength(0);
+	});
+
+	test("rediscovers once the base moves, so an uninstalled repository is not bumped again", async () => {
+		const enrolled = world();
+		const ctx = context(enrolled);
+		let installed = true;
+		let listings = 0;
+		ctx.installations = async () => {
+			listings++;
+			return installed ? [deps(enrolled)] : [];
+		};
+		await bumpPass(ctx, NEW);
+		await bumpPass(ctx, NEW);
+		expect(listings).toBe(1);
+		expect(enrolled.pulls).toHaveLength(1);
+		installed = false;
+		const before = enrolled.requests.length;
+		await bumpPass(ctx, "3".repeat(40));
+		expect(listings).toBe(2);
+		expect(enrolled.requests.slice(before)).toEqual([]);
 	});
 });

@@ -24,7 +24,3 @@ Key a target's recorded bump on the release it moved to, not the base head the
 watcher passes in: otherwise a pass that runs before the Release workflow tags
 the base records the target done, and the release that follows is skipped
 until `main` moves again. Update README.md's "Pin bumps" section to match.
-
-## Required
-
-- [Check the first automated release](/quest/m0/pin-bumps/release.md) - a published release for a bump to follow

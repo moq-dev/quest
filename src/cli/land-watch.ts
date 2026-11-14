@@ -27,6 +27,7 @@ import {
 	EXCERPT,
 	excerpt,
 	installationToken,
+	installations,
 	privateRepository,
 	save,
 	startDaemon,
@@ -68,8 +69,8 @@ export interface WatchOptions {
 	fixerTag: string[];
 	/** Patterns of GitHub branches mirrored into each fixer checkout as `origin/<branch>`. */
 	fixerBranch: string[];
-	/** Repositories whose flake input on this repository each pass bumps to this repository's base. */
-	bump: Repository[];
+	/** Bump every repository the App is installed on whose flake input locks this repository, to this repository's base. */
+	bump?: boolean;
 	/** On the own queue, eject fork picks before pushing their build, so a fork's code never reaches a private runner. */
 	refuseForks?: boolean;
 }
@@ -880,9 +881,6 @@ export async function ownQueue(github: GitHub, repository: Repository, base: str
 
 type Permissions = Record<string, "read" | "write">;
 
-const same = (a: Repository, b: Repository) =>
-	a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase();
-
 /**
  * The installation token permissions the watcher asks for. On GitHub's merge queue, `api` reads the
  * queue's events, comments, and the `merge_group` logs (`actions: read`), and enqueues the armed picks
@@ -950,9 +948,7 @@ export async function watch(
 		options.fixer = resolve(options.fixer);
 		accessSync(options.fixer, constants.X_OK);
 	}
-	if (options.bump.length > 0) checkTools();
-	if (options.bump.some((target) => same(target, repository)))
-		throw new Error("--bump names the watched repository, which cannot bump its own pin");
+	if (options.bump) checkTools();
 	const now = { fetch, now: Date.now };
 	const mint = (wanted: Permissions) => installationToken(repository, options, wanted, now);
 	// Each mode's token is minted only once a pass needs it, and the mode is read with neither, so an
@@ -992,32 +988,38 @@ export async function watch(
 			read,
 		};
 		const connections = new Map<string, BumpConnection>();
-		const bump: BumpContext | undefined =
-			options.bump.length === 0
-				? undefined
-				: {
-						source: repository,
-						targets: options.bump,
-						state: options.state,
-						reader: () => mint({ contents: "read" }),
-						tools: hostTools(repository, options.state),
-						connect: (target) => {
-							const key = `${target.owner}/${target.repo}`;
-							let connection = connections.get(key);
-							if (connection === undefined) {
-								const scoped = (wanted: Permissions) => installationToken(target, options, wanted, now);
-								const push: Permissions = { contents: "write", pull_requests: "write" };
-								connection = {
-									remote: `https://github.com/${key}.git`,
-									deps: apiDependencies(() => scoped(BUMP_PERMISSIONS), { ...now, sleep, warn }),
-									token: (workflows) => scoped(workflows ? { ...push, workflows: "write" } : push),
-									read: authenticatedRead(() => scoped({ contents: "read" })),
-								};
-								connections.set(key, connection);
-							}
-							return connection;
-						},
-					};
+		const bump: BumpContext | undefined = !options.bump
+			? undefined
+			: {
+					source: repository,
+					installations: async () =>
+						(await installations(options, now)).map((mintAll) =>
+							apiDependencies(() => mintAll({ contents: "read", metadata: "read" }), {
+								...now,
+								sleep,
+								warn,
+							}),
+						),
+					state: options.state,
+					reader: () => mint({ contents: "read" }),
+					tools: hostTools(repository, options.state),
+					connect: (target) => {
+						const key = `${target.owner}/${target.repo}`;
+						let connection = connections.get(key);
+						if (connection === undefined) {
+							const scoped = (wanted: Permissions) => installationToken(target, options, wanted, now);
+							const push: Permissions = { contents: "write", pull_requests: "write" };
+							connection = {
+								remote: `https://github.com/${key}.git`,
+								deps: apiDependencies(() => scoped(BUMP_PERMISSIONS), { ...now, sleep, warn }),
+								token: (workflows) => scoped(workflows ? { ...push, workflows: "write" } : push),
+								read: authenticatedRead(() => scoped({ contents: "read" })),
+							};
+							connections.set(key, connection);
+						}
+						return connection;
+					},
+				};
 		await daemonLoop(async () => {
 			pruneLogs(options.state, deps.now(), deps.warn);
 			const api = new GitHub(probe);

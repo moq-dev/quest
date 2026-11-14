@@ -41,7 +41,7 @@ import { held, openDrafts, reach, target, upstream, upstreamRefs } from "./claim
 import { PENDING_MS } from "./admission";
 import { gate, QUICK_MS } from "./gate";
 import { gitHubDependencies, GitHubInputError, pullRequest, readRemote, remoteRepository } from "./github";
-import { mergedHolds, type Repository } from "../github/client";
+import { mergedHolds } from "../github/client";
 import { type Hold, finish, land, release, take } from "./hold";
 import { LAND_CHECK } from "../github/land";
 import { apply, pushCommand } from "./land-apply";
@@ -79,7 +79,7 @@ import { type Terminal, Theme } from "./theme";
 import { type Snapshot, checkout, collect, load, snapshot, under } from "./tree";
 import { statusLines } from "./status";
 import { pullRequestStatus } from "../github/status";
-import { CCUSAGE_MISSING, daysBefore, usage, usageDependencies, usageLines } from "./usage";
+import { TOKEN_MAX_MISSING, daysBefore, usage, usageDependencies, usageLines } from "./usage";
 import { waitForActivity, WaitTimeout } from "./wait";
 import { version } from "./version";
 import { Worktrees } from "./worktree";
@@ -800,14 +800,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"On the own queue, eject each pick whose head is in a fork, or in a deleted repository, before pushing its build, so a fork's code never reaches a private queue runner",
 		)
 		.option(
-			"--bump <owner/repo>",
-			"Keep this repository's flake input in another repository at this repository's base (repeatable): each pass opens or updates that repository's quest-bump PR as the App and lands it",
-			(value: string, previous: Repository[]) => {
-				const match = /^([\w.-]+)\/([\w.-]+)$/.exec(value);
-				if (!match) throw new InvalidArgumentError("expected owner/repo");
-				return [...previous, { owner: match[1], repo: match[2] }];
-			},
-			[] as Repository[],
+			"--bump",
+			"Keep this repository's flake input, in every other repository the App is installed on whose flake.lock locks this repository through exactly one root input, at this repository's base: each pass opens or updates that repository's quest-bump PR as the App and lands it",
 		)
 		.action((options: WatchOptions) => {
 			const origin = readRemote(root(), "origin");
@@ -1124,22 +1118,25 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("usage")
 		.summary("Report which models worked on each PR, at what token cost, and how its reviews went")
 		.description(
-			"Report origin's PRs updated since --since and this host's agent sessions active since then. Each " +
-				"Claude Code or Codex session belongs to the PR whose head branch its log last names, when its Codex log, its " +
-				"checkout's remotes, or a Codex log for its directory names this repository, read from " +
-				"$CLAUDE_CONFIG_DIR (or ~/.config/claude and ~/.claude) and $CODEX_HOME (or ~/.codex); no prompt or reply is read out. Its role is " +
-				"classifying when the PR's ## Review record names it as the risk classifier, reviewing when the record names it as a reviewer or Codex marks it a review, implementing when it began " +
-				"before the PR opened, and iterating otherwise. Tokens and cost come from ccusage (session --json), the " +
-				"cost an estimate at each model's API list price. Each PR also shows its ## Models size, its risk tier from the ## Review record and whether a reviewer raised it, its implementers, and as unread each Implementer line it cannot read, " +
+			"Report origin's PRs updated since --since and the agent sessions active since then on this host and each " +
+				"--ssh host, as token-max sessions exports and prices them, the cost an estimate at each model's API list " +
+				"price; its sub-agents are sessions of their own. Each Claude Code or Codex session belongs to the PR whose " +
+				"head branch it last names, when a repository token-max resolved for it on its own host, or for another " +
+				"session in the same directory there, is this one; no prompt or reply is read out. Its role is " +
+				"classifying when the PR's ## Review record names it as the risk classifier, reviewing when the record names it as a reviewer or Codex marks it a review, implementing when its first " +
+				"request since --since came before the PR opened, and iterating otherwise. A session found on several hosts counts once, at its " +
+				"costliest copy, and the report says how many copies it folded from which hosts; a session with a request " +
+				"token-max could not price or a line it could not read is listed, its cost a lower bound. A host that fails fails the report. " +
+				"Each PR also shows its ## Models size, its risk tier from the ## Review record and whether a reviewer raised it, its implementers, and as unread each Implementer line it cannot read, " +
 				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, marked when it is the shadow, " +
 				"where a merged PR whose last round left only low findings open counts them settled, since the author fixes or refutes those before merge, " +
-				"the later PRs that list it under ## Caused by, and each online reviewer's record from GitHub: whether it " +
+				"the later merged PRs whose ## Caused by bullets open with its link, and each online reviewer's record from GitHub: whether it " +
 				"reviewed the last head, and its findings accepted, declined, unclassified, or unanswered. An online reviewer " +
 				"is a bot whose review has a body or opens a thread, or a review whose body opens with Automated review by <name>; a finding is a " +
 				"review thread it opens or a [P<n>] line in its review body, and its first answer's first word takes or " +
 				"declines it. Rollups follow: spend by size, role, harness, model, and " +
 				"effort, accuracy by size and implementer, summing each branch's tallies but the shadow's once, where an Implementer line's own size, as (iterate, XS), wins " +
-				"over the PR's, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, and each online reviewer's coverage and findings over the merged PRs. Without ccusage on PATH, it says how to install it and reports the PRs' records alone. " +
+				"over the PR's, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, and each online reviewer's coverage and findings over the merged PRs. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
 				"other failures.",
@@ -1147,14 +1144,23 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.option("--since <date>", "First local date to report, as YYYY-MM-DD (default: 7 days ago)", date)
 		.option("--quest <path>", "Report only the PRs of this quest's branch")
 		.option("--pr <number>", "Report only this PR", positiveInteger("--pr"))
+		.option(
+			"--ssh <host>",
+			"Also attribute this SSH destination's sessions, read by the token-max installed there (repeatable)",
+			(host: string, hosts: string[] = []) => [...hosts, host],
+		)
 		.option("--json", "Print one JSON object")
-		.action((options: { since?: string; quest?: string; pr?: number; json?: boolean }) => {
+		.action((options: { since?: string; quest?: string; pr?: number; ssh?: string[]; json?: boolean }) => {
 			const github = { github: () => gitHubDependencies(warn), warn };
 			const since = options.since ?? daysBefore(new Date(), 7);
 			settle(
-				usage(root(), { since, quest: options.quest, pr: options.pr }, usageDependencies(github)),
+				usage(
+					root(),
+					{ since, quest: options.quest, pr: options.pr, ssh: options.ssh },
+					usageDependencies(github),
+				),
 				(report) => {
-					if (!report.priced) warn(CCUSAGE_MISSING);
+					if (!report.priced) warn(TOKEN_MAX_MISSING);
 					if (options.json) print(JSON.stringify(report));
 					else for (const line of usageLines(report)) print(line);
 				},

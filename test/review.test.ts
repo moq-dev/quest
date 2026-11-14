@@ -304,7 +304,14 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
 	vi.stubEnv("FAKE_LOG", log);
 	// The session's own profile would change the logged-out errors.
-	const unset = [...HOST_CREDENTIALS, "CLAUDECODE", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
+	const unset = [
+		...HOST_CREDENTIALS,
+		"CLAUDECODE",
+		"CODEX_THREAD_ID",
+		"CLAUDE_CONFIG_DIR",
+		"CODEX_HOME",
+		"OPENAI_BASE_URL",
+	];
 	for (const name of [
 		...unset,
 		"FAKE_LOGGED_OUT",

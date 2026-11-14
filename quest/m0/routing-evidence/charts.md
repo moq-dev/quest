@@ -74,8 +74,3 @@ Agent's choices, for the implementer to revisit:
   findings on their own, record them beside the tally.
 - Make the first charts from the data on main when this lands, link them in
   this quest's PR, and say which cells are still too thin.
-
-## Required
-
-- [usage through token-max](/quest/m0/routing-evidence/usage-token-max.md) -
-  the cost axis, which today misses sub-agent transcripts, 72% of host spend

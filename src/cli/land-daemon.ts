@@ -4,21 +4,16 @@ import { createPrivateKey, createSign } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { GitHub, type GitHubDependencies, type Repository, object, string } from "../github/client";
+import { array, GitHub, type GitHubDependencies, type Repository, object, string } from "../github/client";
 import { git } from "./land";
 
-/** Mint a short-lived token for this repository, never the installation's other repositories. */
-export async function installationToken(
-	repository: Repository,
-	options: { appId: string },
-	permissions: Record<string, "read" | "write">,
-	deps: Pick<GitHubDependencies, "fetch" | "now">,
-): Promise<string> {
+/** A request to GitHub's API as the App itself, signed with its key. */
+function appRequest(options: { appId: string }, deps: Pick<GitHubDependencies, "fetch" | "now">) {
 	const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
 	const now = Math.floor(deps.now() / 1000);
 	const payload = `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ iat: now - 60, exp: now + 540, iss: options.appId })}`;
 	const signature = createSign("RSA-SHA256").update(payload).sign(readFileSync(keyPath())).toString("base64url");
-	const request = async (path: string, body?: unknown) => {
+	return async (path: string, body?: unknown): Promise<unknown> => {
 		const response = await deps.fetch(`https://api.github.com${path}`, {
 			method: body === undefined ? "GET" : "POST",
 			headers: {
@@ -29,16 +24,47 @@ export async function installationToken(
 			...(body === undefined ? {} : { body: JSON.stringify(body) }),
 		});
 		if (!response.ok) throw new Error(`GitHub App request failed: HTTP ${response.status}`);
-		return object(await response.json());
+		return response.json();
 	};
-	const installation = await request(`/repos/${repository.owner}/${repository.repo}/installation`);
+}
+
+/** Mint a short-lived token for this repository, never the installation's other repositories. */
+export async function installationToken(
+	repository: Repository,
+	options: { appId: string },
+	permissions: Record<string, "read" | "write">,
+	deps: Pick<GitHubDependencies, "fetch" | "now">,
+): Promise<string> {
+	const request = appRequest(options, deps);
+	const installation = object(await request(`/repos/${repository.owner}/${repository.repo}/installation`));
 	return string(
-		(
+		object(
 			await request(`/app/installations/${Number(installation.id)}/access_tokens`, {
 				repositories: [repository.repo],
 				permissions,
-			})
+			}),
 		).token,
+	);
+}
+
+/** The App's installations, each as a function minting a token for all of that installation's repositories. */
+export async function installations(
+	options: { appId: string },
+	deps: Pick<GitHubDependencies, "fetch" | "now">,
+): Promise<((permissions: Record<string, "read" | "write">) => Promise<string>)[]> {
+	const ids: number[] = [];
+	for (let page = 1; ; page++) {
+		const rows = array(await appRequest(options, deps)(`/app/installations?per_page=100&page=${page}`));
+		// GitHub lists a suspended installation but refuses to mint its tokens.
+		ids.push(...rows.filter((row) => row.suspended_at == null).map((row) => Number(row.id)));
+		if (rows.length < 100) break;
+	}
+	return ids.map(
+		(id) => async (permissions) =>
+			string(
+				object(await appRequest(options, deps)(`/app/installations/${id}/access_tokens`, { permissions }))
+					.token,
+			),
 	);
 }
 
