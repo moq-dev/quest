@@ -4,7 +4,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, setPriority } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
 import { type SessionRecord } from "../core";
@@ -375,11 +375,12 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 				);
 			}
 			const repositories = new Set([origin, key(repository)]);
-			// A sub-agent stops without the stop hook naming it, so each queued session brings its own, routed as
-			// its own checkout routes it: a checkout that still exists must be a queued one's, or name the same origin and
-			// endpoint; for one since deleted, every repository token-max resolved for it must be this group's.
+			// A sub-agent stops without the stop hook naming it, so each queued session brings its own, routed as its
+			// own checkout routes it, found from the nearest folder still there: a checkout must be a queued one's, or
+			// name the same origin and endpoint. With no checkout left, every repository token-max resolved for it
+			// must be this group's.
 			const routed = (s: Session): boolean => {
-				if (s.cwd !== null && existsSync(s.cwd)) {
+				if (s.cwd !== null && insideCheckout(s.cwd)) {
 					const own = questRoot(s.cwd);
 					if (own === null) return false;
 					if (roots.has(own)) return true;
@@ -445,6 +446,14 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 	if (notes.length) writeFailure(deps.env, notes.join("; "));
 	else rmSync(join(dir, "failure"), { force: true });
 	return sent;
+}
+
+/** Whether a checkout still holds `dir` or the nearest of its parents that exists, as `questRoot` finds it. */
+function insideCheckout(dir: string): boolean {
+	for (let at = dir; ; at = dirname(at)) {
+		if (existsSync(join(at, ".git"))) return true;
+		if (dirname(at) === at) return false;
+	}
 }
 
 /** Drop a stop the sender read; a later stop of the same session has a file of its own and stays queued. */

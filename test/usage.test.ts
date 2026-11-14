@@ -696,7 +696,8 @@ describe("usage", () => {
 	test("counts each session with no ID apart in the spend rollup", async () => {
 		const { root, deps, sessions } = setup();
 		const known = sessions.find((s) => s.id === CLAUDE)!;
-		const anonymous = [1, 2].map((n) => ({ ...known, id: null, start: known.start + n }));
+		// Same host and span, told apart by their transcripts.
+		const anonymous = [1, 2].map((n) => ({ ...known, id: null, files: [`/t/${n}.jsonl`] }));
 		const report = await usage(root, { since: "2026-11-05" }, deps([...sessions, ...anonymous]));
 		const row = report.spend.find((s) => s.role === "implementing" && s.harness === "claude")!;
 		expect([row.sessions, row.cost]).toEqual([3, 15]);

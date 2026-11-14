@@ -543,6 +543,9 @@ export function sessionRecords(sources: RecordSources): Map<Session, SessionReco
 	});
 }
 
+/** A row of a session with no ID, by its host and transcript files, which no two sessions share. */
+const anonymous = new WeakMap<SessionRow, string>();
+
 function spendRows(pulls: PullRow[]): SpendRow[] {
 	const rows = new Map<string, SpendRow & { seen: Set<string> }>();
 	for (const each of pulls)
@@ -563,11 +566,7 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 					};
 					rows.set(id, row);
 				}
-				// A session with no ID is told apart by its host and span, which no two sessions of a harness share.
-				const key = JSON.stringify([
-					session.harness,
-					session.session ?? [session.host, session.start, session.end],
-				]);
+				const key = JSON.stringify([session.harness, session.session ?? anonymous.get(session)]);
 				if (!row.seen.has(key)) row.sessions++;
 				row.seen.add(key);
 				// A session on several PRs, as a coordinator is, counts toward each in equal shares.
@@ -823,7 +822,11 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		for (const session of kept) {
 			const record = records.get(session);
 			const on = record?.pulls.flatMap((number) => byNumber.get(number) ?? []) ?? [];
-			for (const row of on) row.sessions.push({ ...record!, host: session.host });
+			for (const row of on) {
+				const each = { ...record!, host: session.host };
+				if (each.session === null) anonymous.set(each, JSON.stringify([session.host, session.files]));
+				row.sessions.push(each);
+			}
 			if (on.length) attributed.push(session);
 			else if (!record?.pulls.length) left.push(session);
 		}

@@ -242,6 +242,9 @@ test("a sub-agent is sent only where its own checkout routes it", async () => {
 		session("here", "quest/m0/a", { parent: "s1", cwd: root }),
 		session("twin", "quest/m0/a", { parent: "s1", cwd: checkout(ENDPOINT) }),
 		session("optedOut", "quest/m0/a", { parent: "s1", cwd: checkout() }),
+		// A deleted folder routes by the checkout still holding its nearest existing parent.
+		session("hereGone", "quest/m0/a", { parent: "s1", cwd: join(root, "deleted", "sub") }),
+		session("optedOutGone", "quest/m0/a", { parent: "s1", cwd: join(checkout(), "deleted", "sub") }),
 		session("fork", "quest/m0/a", { parent: "s1", cwd: other, repositories: ["acme/fork", "acme/proj"] }),
 		// Deleted checkouts: every repository resolved must be this one's.
 		session("gone", "quest/m0/a", { parent: "s1" }),
@@ -250,7 +253,13 @@ test("a sub-agent is sent only where its own checkout routes it", async () => {
 	];
 	const { deps, uploads } = sender(env, 200, sessions);
 	await sendPass(deps);
-	expect(parseUpload(uploads[0]!.body).records.map((r) => r.session)).toEqual(["s1", "here", "twin", "gone"]);
+	expect(parseUpload(uploads[0]!.body).records.map((r) => r.session)).toEqual([
+		"s1",
+		"here",
+		"twin",
+		"hereGone",
+		"gone",
+	]);
 });
 
 test("an origin that a URL rewrite points at GitHub is read as configured", () => {
