@@ -84,7 +84,7 @@ export function questWriters(doc: Doc): { arm: Arm | null; models: readonly Mode
 	if (!arms) return { arm: null, models: WRITERS[sized] };
 	const arm = ARM_NAMES[createHash("sha256").update(doc.path).digest()[0]! & 1]!;
 	const entry = arms[arm];
-	const same = (e: Model) => e.model === entry.model && e.effort === entry.effort;
+	const same = (e: Model) => e.model === entry.model;
 	return { arm, models: [entry, ...WRITERS[sized].filter((e) => !same(e))] };
 }
 
