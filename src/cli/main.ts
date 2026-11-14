@@ -71,7 +71,7 @@ import {
 import { CHECKED_CONTEXT, USER_ASKED, questRoot } from "./rules";
 import { messageLines, messages } from "./messages";
 import { logWait, pullWaitKind, readWaits } from "./waits";
-import { CHECKOUT_CONFIG, background, sendQueued, tokensPath } from "./send";
+import { CHECKOUT_CONFIG, SEND_INTERVAL, background, sendQueued, tokensPath } from "./send";
 import { heal, init, stubFindings, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
@@ -1199,7 +1199,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"never doubles. An endpoint that refuses the token (401 or 403) is sent nothing more until the token " +
 				"changes; any other failure keeps the sessions queued for the next run, and the next stop hook says so " +
 				"once. While another sender runs, it leaves the queue to that one. The stop hook runs it detached with " +
-				"--background.\n\nUses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when sent, 1 on failure.",
+				"--background, at low priority and with its passes a minute apart, so a busy host's stops never spend " +
+				"its GitHub quota.\n\nUses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when sent, 1 on failure or a refused token.",
 		)
 		.option("--background", "Run at low priority, as the stop hook starts it")
 		.action((options: { background?: boolean }) => {
@@ -1211,11 +1212,19 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					sessions: (since) => runTokenMax(since, []),
 					waits: (since) => readWaits(since),
 					fetch: globalThis.fetch,
+					now: Date.now,
+					sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+					interval: options.background ? SEND_INTERVAL : 0,
 				}),
 				(sent) => {
 					if (sent === null) print("another sender is running; it sends the queue");
 					for (const each of sent ?? [])
-						print(`sent ${each.records} records of ${each.repository} to ${each.endpoint}`);
+						if (each.refused)
+							warn(
+								`${each.endpoint} refused the token for ${each.repository}; ${each.records} records dropped`,
+							);
+						else print(`sent ${each.records} records of ${each.repository} to ${each.endpoint}`);
+					return sent?.some((each) => each.refused) ? 1 : 0;
 				},
 			);
 		});

@@ -242,7 +242,7 @@ function unseenFailure(env: NodeJS.ProcessEnv): string | null {
 	const seen = `${path}.seen`;
 	if (existsSync(seen) && readFileSync(seen, "utf8") === text) return null;
 	writeFileSync(seen, text);
-	return `quest: the last session records were not sent and will be resent: ${text.trim()}`;
+	return `quest: ${text.trim()}`;
 }
 
 function writeFailure(env: NodeJS.ProcessEnv, text: string): void {
@@ -259,43 +259,64 @@ export interface SendDependencies {
 	sessions(since: Date): Session[] | null;
 	waits(since: number): LoggedWait[];
 	fetch: typeof globalThis.fetch;
+	now(): number;
+	sleep(ms: number): Promise<unknown>;
+	/** The least time between the starts of two passes, so a busy host's stops cannot spend its GitHub quota. */
+	interval: number;
 }
+
+/** The least time between a background sender's passes. */
+export const SEND_INTERVAL = 60_000;
 
 /** The outcome of one upload. */
 export interface Sent {
 	endpoint: string;
 	repository: string;
 	records: number;
+	/** The endpoint refused the token, so the records were dropped. */
+	refused: boolean;
 }
 
 /**
  * Send every queued session's record, with those of its sub-agents on this host, one upload per endpoint and
  * repository. A record goes only to the endpoint its token is paired with. An upload refused for access drops its
  * sessions and says so once; any other failure keeps them queued for the next run and throws. A session queued again
- * while an upload ran stays queued. With another sender running, it leaves the queue to that one, which runs again.
+ * while an upload ran stays queued. With another sender running, it leaves the queue to that one, which runs again,
+ * passes starting at least `interval` apart.
  */
 export async function sendQueued(deps: SendDependencies): Promise<Sent[] | null> {
 	const dir = stateDirectory(deps.env);
 	mkdirSync(join(dir, "pending"), { recursive: true, mode: 0o700 });
 	const lock = join(dir, "send.lock");
 	const again = join(dir, "send.again");
-	if (!acquire(lock)) {
-		writeFileSync(again, "");
-		return null;
+	const last = join(dir, "send.last");
+	const sent: Sent[] = [];
+	// A sender that asks for another pass just as this one lets go is caught by checking once more after.
+	for (let first = true; first || existsSync(again); first = false) {
+		if (!acquire(lock)) {
+			writeFileSync(again, "");
+			return first ? null : sent;
+		}
+		try {
+			do {
+				rmSync(again, { force: true });
+				const previous = existsSync(last) ? Number(readFileSync(last, "utf8")) : 0;
+				const wait = previous + deps.interval - deps.now();
+				if (wait > 0) await deps.sleep(Math.min(wait, deps.interval));
+				writeFileSync(last, String(deps.now()));
+				sent.push(...(await sendOnce(deps, dir)));
+			} while (existsSync(again));
+		} catch (error) {
+			writeFailure(
+				deps.env,
+				`session records were not sent and stay queued for the next run: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			throw error;
+		} finally {
+			rmSync(lock, { force: true });
+		}
 	}
-	try {
-		const sent: Sent[] = [];
-		do {
-			rmSync(again, { force: true });
-			sent.push(...(await sendOnce(deps, dir)));
-		} while (existsSync(again));
-		return sent;
-	} catch (error) {
-		writeFailure(deps.env, error instanceof Error ? error.message : String(error));
-		throw error;
-	} finally {
-		rmSync(lock, { force: true });
-	}
+	return sent;
 }
 
 /** Take the lock file, or take it over from a sender that died; false while a live one holds it. */
@@ -405,14 +426,15 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 				refuse(deps.env, endpoint, token);
 				for (const q of group) settle(q);
 				refused.push(
-					`${endpoint} refused this host's token (${response.status}), so it is sent no more records until the token changes`,
+					`${endpoint} refused this host's token (${response.status}), so it is sent no more session records until the token changes`,
 				);
+				sent.push({ endpoint, repository: key(repository), records: upload.length, refused: true });
 				continue;
 			}
 			if (!response.ok)
 				throw new Error(`${endpoint} answered ${response.status}: ${(await response.text()).slice(0, 500)}`);
 			for (const q of group) settle(q);
-			sent.push({ endpoint, repository: key(repository), records: upload.length });
+			sent.push({ endpoint, repository: key(repository), records: upload.length, refused: false });
 		} catch (error) {
 			failures.push(`${origin} to ${endpoint}: ${error instanceof Error ? error.message : String(error)}`);
 		}

@@ -85,9 +85,10 @@ const session = (id: string, branch: string, extra: Partial<Session> = {}): Sess
 });
 
 /** Sender dependencies whose endpoint answers `status`, recording each upload and token-max's window. */
-function sender(env: NodeJS.ProcessEnv, status: number, sessions: Session[] | null) {
+function sender(env: NodeJS.ProcessEnv, status: number, sessions: Session[] | null, interval = 0) {
 	const uploads: { token: string; body: unknown }[] = [];
 	const windows: Date[] = [];
+	const clock = { now: Date.parse("2026-11-06T12:00:00Z"), slept: [] as number[] };
 	const json = (value: unknown) =>
 		new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
 	const github = async (input: string | URL | Request) => {
@@ -133,6 +134,12 @@ function sender(env: NodeJS.ProcessEnv, status: number, sessions: Session[] | nu
 			return sessions;
 		},
 		waits: () => [],
+		now: () => clock.now,
+		sleep: async (ms) => {
+			clock.slept.push(ms);
+			clock.now += ms;
+		},
+		interval,
 		fetch: (async (input: string | URL | Request, init?: RequestInit) => {
 			expect(String(input)).toBe(ENDPOINT);
 			uploads.push({
@@ -142,7 +149,7 @@ function sender(env: NodeJS.ProcessEnv, status: number, sessions: Session[] | nu
 			return new Response("", { status });
 		}) as typeof fetch,
 	};
-	return { deps, uploads, windows };
+	return { deps, uploads, windows, clock };
 }
 
 const pending = (env: NodeJS.ProcessEnv) => readdirSync(join(env.XDG_STATE_HOME!, "quest", "records", "pending"));
@@ -157,7 +164,9 @@ test("the sender posts each queued session with its sub-agents, from its transcr
 		session("other", "quest/m0/a"),
 	];
 	const { deps, uploads, windows } = sender(env, 200, sessions);
-	expect(await sendQueued(deps)).toEqual([{ endpoint: ENDPOINT, repository: "acme/proj", records: 2 }]);
+	expect(await sendQueued(deps)).toEqual([
+		{ endpoint: ENDPOINT, repository: "acme/proj", records: 2, refused: false },
+	]);
 	expect(windows).toEqual([new Date("2026-11-06T10:00:00Z")]);
 	expect(uploads).toHaveLength(1);
 	expect(uploads[0]!.token).toBe("Bearer secret");
@@ -181,7 +190,9 @@ test("a failed upload stays queued and is said once; a refused token stops sendi
 	expect(queue(stopped(root), env).notices).toEqual([]);
 
 	const refusing = sender(env, 403, [session("s1", "quest/m0/a")]);
-	expect(await sendQueued(refusing.deps)).toEqual([]);
+	expect(await sendQueued(refusing.deps)).toEqual([
+		{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, refused: true },
+	]);
 	expect(pending(env)).toEqual([]);
 	expect(queue(stopped(root), env)).toEqual({
 		notices: [expect.stringContaining("refused this host's token (403)")],
@@ -233,4 +244,19 @@ test("Claude Code's and Codex's Stop queue the session and start a sender", () =
 		"cannot queue this session's record",
 	);
 	expect(() => hook({ hook_event_name: "Stop", cwd, turn_id: "t1" }, deps)).toThrow("session_id");
+});
+
+test("a background sender's passes start an interval apart, across senders", async () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	queue(stopped(root), env);
+	const first = sender(env, 200, [session("s1", "quest/m0/a")], 60_000);
+	await sendQueued(first.deps);
+	expect(first.clock.slept).toEqual([]);
+	queue(stopped(root), env);
+	const second = sender(env, 200, [session("s1", "quest/m0/a")], 60_000);
+	second.clock.now = first.clock.now + 15_000;
+	await sendQueued(second.deps);
+	expect(second.clock.slept).toEqual([45_000]);
+	expect(second.uploads).toHaveLength(1);
 });

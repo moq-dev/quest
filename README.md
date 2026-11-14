@@ -1625,7 +1625,8 @@ once as a system message.
 
 The `Stop` hook [`quest setup`](#configure-your-agent) installs for Claude Code
 and Codex queues the session under `$XDG_STATE_HOME/quest/records` and starts
-`quest records send --background` detached at low priority. The sender runs
+`quest records send --background` detached at low priority, its passes a
+minute apart so a busy host's stops never spend its GitHub quota. The sender runs
 token-max on this host from the earliest queued session's first instant,
 reads the PRs updated since then, and posts `{"records": [...]}` with
 `Authorization: Bearer <token>`, one upload per endpoint and repository, each
