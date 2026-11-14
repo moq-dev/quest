@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -73,6 +73,21 @@ try {
 const RISK_REPLY = `JSON.stringify(process.env.FAKE_RISK ? JSON.parse(process.env.FAKE_RISK) : { tier: "medium", reason: "It changes what the library returns." })`;
 
 /**
+ * Records one call as its own file in FAKE_LOG, a directory, renamed into place
+ * once whole, named by its microsecond start so the files sort in call order. A
+ * fake the review aborts can die mid-write, and a partial line in one shared
+ * log would break the reader.
+ */
+const LOG = `
+const logged = (call) => {
+	const name = Math.round((performance.timeOrigin + performance.now()) * 1000).toString() + "-" + process.pid;
+	const file = require("node:path").join(process.env.FAKE_LOG, name);
+	fs.writeFileSync(file + ".tmp", JSON.stringify(call));
+	fs.renameSync(file + ".tmp", file + ".json");
+};
+`;
+
+/**
  * Fake reviewer CLIs. Each logs its argv, stdin, and the variables it was
  * given, then answers as the FAKE_* variables say. FAKE_LOGGED_OUT removes the
  * stored login, so only a credential variable the real CLI reads, or Claude
@@ -87,11 +102,11 @@ const RISK_REPLY = `JSON.stringify(process.env.FAKE_RISK ? JSON.parse(process.en
  */
 const FAKES: Record<string, string> = {
 	claude: `
-const fs = require("node:fs");
+const fs = require("node:fs");${LOG}
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|ANTHROPIC|FAKE_HOST|PATH$)/.test(k)));
-fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
+logged({ argv, stdin, env, cwd: process.cwd() });
 const credential = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"].some((k) => process.env[k]);
 const provider = Object.entries(process.env).some(([k, v]) => k.startsWith("CLAUDE_CODE_USE_") && v === "1");
 const loggedIn = !process.env.FAKE_LOGGED_OUT || credential || provider;
@@ -159,11 +174,11 @@ if (argv.includes("--session-id") && argv.includes("--json-schema")) {
 }
 `,
 	codex: `
-const fs = require("node:fs");
+const fs = require("node:fs");${LOG}
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|ANTHROPIC|FAKE_HOST|PATH$)/.test(k)));
-fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
+logged({ argv, stdin, env, cwd: process.cwd() });
 if (argv[0] === "login") process.exit(process.env.FAKE_LOGGED_OUT && !process.env.CODEX_ACCESS_TOKEN ? 1 : 0);
 if (process.env.FAKE_HANG) {
 	// It takes a while to exit when asked to, as a CLI saving its session does.
@@ -300,7 +315,8 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	write(repo, "src/lib.ts", "export const x = 2;\n");
 	git(repo, "commit", "-qam", "change");
 
-	const log = join(dir, "calls.log");
+	const log = join(dir, "calls");
+	mkdirSync(log);
 	vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
 	vi.stubEnv("FAKE_LOG", log);
 	// The session's own profile would change the logged-out errors.
@@ -326,13 +342,12 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	}
 	if (host === "CLAUDECODE") vi.stubEnv("CLAUDECODE", "1");
 	if (host === "CODEX_THREAD_ID") vi.stubEnv("CODEX_THREAD_ID", "parent");
+	// Only whole calls: a fake's unfinished write stays a .tmp file.
 	const read = (path: string) =>
-		existsSync(path)
-			? readFileSync(path, "utf8")
-					.trim()
-					.split("\n")
-					.map((line) => JSON.parse(line))
-			: [];
+		readdirSync(path)
+			.filter((name) => name.endsWith(".json"))
+			.sort()
+			.map((name) => JSON.parse(readFileSync(join(path, name), "utf8")));
 	return { repo, bin, calls: () => read(log) };
 }
 
