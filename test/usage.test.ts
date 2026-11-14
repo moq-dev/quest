@@ -8,7 +8,7 @@ import { implementer } from "../src/cli/models-record";
 import { fixes } from "../src/cli/land-fixer";
 import type { Round, Tally } from "../src/cli/review";
 import { parseReview, reviewRecord } from "../src/cli/review-record";
-import { type Session, causes, fold, parseSessions, usage, usageLines } from "../src/cli/usage";
+import { type Session, causes, fold, parseSessions, share, usage, usageLines } from "../src/cli/usage";
 import { tempDir } from "./fixture";
 
 const THREAD = "01a1b8e8-8fca-7793-99d1-062f41f8a7b0";
@@ -381,6 +381,55 @@ describe("PR records", () => {
 			size: null,
 		});
 		expect(implementer("Implementer: someone")).toBeNull();
+	});
+});
+
+describe("share", () => {
+	const spend = (model: string, effort: string, cost: number, role?: "implementing" | "iterating") => ({
+		model,
+		effort,
+		input: 0,
+		cacheWrite: 0,
+		cacheRead: 0,
+		output: 0,
+		cost,
+		complete: true,
+		...(role ? { role } : {}),
+	});
+	const costs = (shares: Map<number, { cost: number }>) => [...shares].map(([i, t]) => [i, t.cost]);
+
+	test("tells seats of one model and effort apart by role, and splits what it cannot", () => {
+		// An M writer on Opus medium and an S iterate on Opus medium: each session goes to its own seat.
+		const seats = [
+			{ model: "claude-opus-5-5", effort: "medium" },
+			{ model: "claude-opus-5-5", effort: "medium" },
+		];
+		expect(
+			costs(
+				share(
+					[
+						spend("claude-opus-5-5", "medium", 4, "implementing"),
+						spend("claude-opus-5-5", "medium", 2, "iterating"),
+					],
+					seats,
+				),
+			),
+		).toEqual([
+			[0, 4],
+			[1, 2],
+		]);
+		// A routed and a shadow reviewer at one effort: their spend is split evenly.
+		expect(
+			costs(
+				share(
+					[spend("gpt-6.1-sol", "low", 1)],
+					seats.map(() => ({ model: "gpt-6.1-sol", effort: "low" })),
+				),
+			),
+		).toEqual([
+			[0, 0.5],
+			[1, 0.5],
+		]);
 	});
 });
 

@@ -605,11 +605,17 @@ function count(to: { tally: Omit<Counts, "first">; firstRounds: FirstRounds }, t
 }
 
 /**
- * A PR's spend split among `seats`, as its record names them: each model's spend to the seat of that model, of its
+ * A PR's spend split among `seats`, as its record names them: each model's spend to the seats of that model, of its
  * effort where both name one, and spend of a model no seat names, as a sub-agent on a smaller model, to the seat
- * that took the most, the PR's main one. Returns each seat's share, by index, and nothing without a seat.
+ * that took the most, the PR's main one. Spend that fits several seats goes to the first, the PR's writer, when an
+ * implementing session spent it, and to the others when an iterating one did; what still fits several, such as a
+ * routed and a shadow reviewer at one effort, is split evenly among them rather than given to one. Returns each
+ * seat's share, by index, and nothing without a seat.
  */
-function share(spent: Spent[], seats: { model: string; effort: string }[]): Map<number, Tokens> {
+export function share(
+	spent: (Spent & { role?: Role })[],
+	seats: { model: string; effort: string }[],
+): Map<number, Tokens> {
 	const shares = new Map<number, Tokens>();
 	if (seats.length === 0) return shares;
 	const into = (seat: number, from: Tokens) => {
@@ -621,12 +627,14 @@ function share(spent: Spent[], seats: { model: string; effort: string }[]): Map<
 	for (const each of spent) {
 		const same = seats.flatMap((seat, i) => (seat.model === each.model ? [i] : []));
 		const effort = each.effort ?? "unknown";
-		const seat =
-			same.find((i) => seats[i]!.effort === effort) ??
-			same.find((i) => seats[i]!.effort === "unknown" || effort === "unknown") ??
-			same[0];
-		if (seat === undefined) rest.push(each);
-		else into(seat, each);
+		const exact = same.filter((i) => seats[i]!.effort === effort);
+		const loose = same.filter((i) => seats[i]!.effort === "unknown" || effort === "unknown");
+		let fits = exact.length > 0 ? exact : loose.length > 0 ? loose : same;
+		if (fits.length > 1 && each.role === "implementing" && fits.includes(0)) fits = [0];
+		else if (fits.length > 1 && each.role === "iterating" && fits.some((i) => i !== 0))
+			fits = fits.filter((i) => i !== 0);
+		if (fits.length === 0) rest.push(each);
+		else for (const seat of fits) into(seat, part(each, fits.length));
 	}
 	if (rest.length > 0) {
 		const main = [...shares].reduce<[number, Tokens] | undefined>(
@@ -636,6 +644,18 @@ function share(spent: Spent[], seats: { model: string; effort: string }[]): Map<
 		for (const each of rest) into(main?.[0] ?? 0, each);
 	}
 	return shares;
+}
+
+/** One `n`th of `tokens`. */
+function part(tokens: Tokens, n: number): Tokens {
+	return {
+		input: tokens.input / n,
+		cacheWrite: tokens.cacheWrite / n,
+		cacheRead: tokens.cacheRead / n,
+		output: tokens.output / n,
+		cost: tokens.cost / n,
+		complete: tokens.complete,
+	};
 }
 
 /**
@@ -674,7 +694,9 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 				}),
 			).values(),
 		];
-		const writing = each.sessions.filter((session) => session.role !== "reviewing").flatMap((s) => s.models);
+		const writing = each.sessions
+			.filter((session) => session.role !== "reviewing")
+			.flatMap((session) => session.models.map((spent) => ({ ...spent, role: session.role })));
 		const shares = each.state === "merged" ? share(writing, distinct) : new Map<number, Tokens>();
 		for (const [i, implementer] of distinct.entries()) {
 			const size = implementer.size;
