@@ -949,7 +949,7 @@ const mean = (sum: number, count: number) => (count ? (sum / count).toFixed(1) :
 const firsts = (f: FirstRounds) => `first rounds ${f.pulls}: ${severityText(f.findings)}`;
 const per = (s: Spend, what: string) =>
 	s.pulls
-		? `~$${(s.cost / s.pulls).toFixed(2)}${s.complete ? "" : " or more"} per ${what} over ${s.pulls}`
+		? `~$${(s.cost / s.pulls).toFixed(2)}${s.complete ? "" : " or more"} per ${what} over ${s.pulls}${s.split ? `, ~$${s.split.toFixed(2)} of it split with other seats` : ""}`
 		: `no ${what} priced`;
 const percent = (part: number, whole: number) => (whole ? `${Math.round((100 * part) / whole)}%` : "-");
 const answers = (r: Omit<OnlineReview, "reviewer" | "finalHead">) =>

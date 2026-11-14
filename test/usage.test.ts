@@ -852,6 +852,12 @@ describe("usage", () => {
 		expect(text).toContain(
 			"   L  Codex        gpt-6.1-sol      high            4 reviewed: rounds 2.3, findings 8 (high 4, medium 1, low 3): fixed 4, refuted 2, settled 1, open 1, first rounds 4: 4 (high 4); ~$1.25 per PR reviewed over 1\n",
 		);
+		// Spend split among seats nothing told apart is shown, so the text report does not hide it.
+		sol.spent.split = 0.5;
+		expect(usageLines(report).join("\n")).toContain(
+			"~$1.25 per PR reviewed over 1, ~$0.50 of it split with other seats\n",
+		);
+		sol.spent.split = 0;
 		expect(ten.review.map((r) => [r.effort, r.shadow])).toEqual([
 			["high", false],
 			["high", false],
