@@ -307,7 +307,11 @@ describe("unpin", () => {
 });
 
 test("bumpBody waits on a maintainer only for findings", () => {
-	const options = { source: SOURCE, input: "quest", from: OLD, to: NEW,
+	const options = {
+		source: SOURCE,
+		input: "quest",
+		from: OLD,
+		to: NEW,
 		tag: "v1.0.0",
 		unpinned: false,
 		changed: ["flake.lock"],
@@ -329,9 +333,7 @@ describe("latestRelease", () => {
 				const path = new URL(String(input instanceof Request ? input.url : input)).pathname;
 				if (path === "/repos/moq-dev/quest/releases/latest") {
 					const [tag] = Object.keys(releases);
-					return tag === undefined
-						? new Response("{}", { status: 404 })
-						: Response.json({ tag_name: tag });
+					return tag === undefined ? new Response("{}", { status: 404 }) : Response.json({ tag_name: tag });
 				}
 				const commit = /^\/repos\/moq-dev\/quest\/commits\/(.+)$/.exec(path);
 				if (commit) return Response.json({ sha: releases[decodeURIComponent(commit[1])] });
@@ -362,7 +364,10 @@ describe("bumpPass", () => {
 	test("opens a bump PR on a gated base, unpinning the URL, and queues it once", async () => {
 		const target = world();
 		const ctx = context(target);
-		expect(await bumpPass(ctx, release(NEW))).toEqual([`bump moq-dev/widget 7 v1.0.0 ${NEW}`, "bump landing moq-dev/widget 7"]);
+		expect(await bumpPass(ctx, release(NEW))).toEqual([
+			`bump moq-dev/widget 7 v1.0.0 ${NEW}`,
+			"bump landing moq-dev/widget 7",
+		]);
 
 		const head = git(bare(target), "rev-parse", BUMP_BRANCH);
 		expect(git(bare(target), "show", "-s", "--format=%P %an", head)).toBe(`${target.base} moq-bot`);
@@ -392,7 +397,10 @@ describe("bumpPass", () => {
 		target.pulls[0].auto_merge = { enabled_at: "now" };
 		landed.mockClear();
 
-		expect(await bumpPass(ctx, release(NEW))).toEqual([`bump moq-dev/widget 7 v1.0.0 ${NEW}`, "bump landing moq-dev/widget 7"]);
+		expect(await bumpPass(ctx, release(NEW))).toEqual([
+			`bump moq-dev/widget 7 v1.0.0 ${NEW}`,
+			"bump landing moq-dev/widget 7",
+		]);
 		const head = git(bare(target), "rev-parse", BUMP_BRANCH);
 		expect(git(bare(target), "show", "-s", "--format=%P", head)).toBe(`${first} ${target.base}`);
 		expect(JSON.parse(git(bare(target), "show", `${head}:flake.lock`)).nodes.quest_2.locked.rev).toBe(NEW);
@@ -547,7 +555,9 @@ describe("bumpPass", () => {
 		git(work, "commit", "--quiet", "-m", "link");
 		git(work, "push", "--quiet", "origin", "HEAD:main");
 		target.base = git(work, "rev-parse", "HEAD");
-		await expect(bumpPass(context(target), release(NEW))).rejects.toThrow("AGENTS.md is a symlink out of the repository");
+		await expect(bumpPass(context(target), release(NEW))).rejects.toThrow(
+			"AGENTS.md is a symlink out of the repository",
+		);
 		expect(target.pulls).toEqual([]);
 	});
 
@@ -563,7 +573,9 @@ describe("bumpPass", () => {
 		git(work, "commit", "--quiet", "-m", "link");
 		git(work, "push", "--quiet", "origin", "HEAD:main");
 		target.base = git(work, "rev-parse", "HEAD");
-		await expect(bumpPass(context(target), release(NEW))).rejects.toThrow("escape.md is a symlink out of the repository");
+		await expect(bumpPass(context(target), release(NEW))).rejects.toThrow(
+			"escape.md is a symlink out of the repository",
+		);
 	});
 
 	test("runs quest check --fix on the base's whole history, which names deleted quests", async () => {
@@ -650,7 +662,13 @@ describe("bumpPass", () => {
 		await expect(bumpPass(ctx, release(NEW))).rejects.toThrow("moq-dev/broken: flake.lock has 0 root inputs");
 		expect(good.pulls).toHaveLength(1);
 		expect(JSON.parse(readFileSync(join(ctx.state, "bump.json"), "utf8"))).toEqual({
-			"moq-dev/widget": { sha: NEW, tag: "v1.0.0", pr: 7, head: git(bare(good), "rev-parse", BUMP_BRANCH), status: "done" },
+			"moq-dev/widget": {
+				sha: NEW,
+				tag: "v1.0.0",
+				pr: 7,
+				head: git(bare(good), "rev-parse", BUMP_BRANCH),
+				status: "done",
+			},
 		});
 	});
 });

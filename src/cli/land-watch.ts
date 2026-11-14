@@ -43,7 +43,15 @@ import {
 	requeuedHeads,
 } from "./land-watch-fix";
 import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
-import { BUMP_PERMISSIONS, type BumpConnection, type BumpContext, bumpPass, checkTools, hostTools, latestRelease } from "./land-bump";
+import {
+	BUMP_PERMISSIONS,
+	type BumpConnection,
+	type BumpContext,
+	bumpPass,
+	checkTools,
+	hostTools,
+	latestRelease,
+} from "./land-bump";
 import { pruneLogs } from "./land-prune";
 import { enabledHead, headBefore } from "../github/status";
 import { describe, readSignals } from "../github/signals";
