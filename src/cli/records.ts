@@ -196,16 +196,23 @@ function assignWaits(
 	const byId = new Map(local.map((s) => [id(s.harness, s.id), s]));
 	const assigned = new Map<Session, LoggedWait[]>();
 	for (const wait of logged) {
-		// A session's start is its first request in the window, so a wait begun before the window is placed by its end.
-		const start = Date.parse(wait.start) < since ? Date.parse(wait.end) : Date.parse(wait.start);
+		const start = Date.parse(wait.start);
+		const end = Date.parse(wait.end);
+		// A session's start is its first request in the window, so before the window no start orders a wait: any
+		// session it names may own it, and a sub-agent owns it by running at any point of it.
+		const clipped = start < since;
 		const named = wait.sessions.flatMap((n) => byId.get(id(n.harness, n.session)) ?? []);
-		const owner = named.filter((s) => s.start <= start).sort((a, b) => b.start - a.start)[0];
+		const owner = named.filter((s) => clipped || s.start <= start).sort((a, b) => b.start - a.start)[0];
 		if (!owner) continue;
 		const inside = (dir: string | null) =>
 			dir !== null && (wait.directory === dir || wait.directory.startsWith(dir.endsWith("/") ? dir : `${dir}/`));
 		const running = local.filter(
 			(s) =>
-				s.harness === "claude" && parentOf(s) === owner && s.start <= start && start <= s.end && inside(s.cwd),
+				s.harness === "claude" &&
+				parentOf(s) === owner &&
+				(clipped ? s.start <= end : s.start <= start) &&
+				start <= s.end &&
+				inside(s.cwd),
 		);
 		const depth = Math.max(-1, ...running.map((s) => s.cwd!.length));
 		const deepest = running.filter((s) => s.cwd!.length === depth);

@@ -412,7 +412,8 @@ describe("buildRecords", () => {
 
 	test("a session with no ID keeps its PR, and a wait begun before the window still counts", () => {
 		const anonymous = { ...session("x"), id: null };
-		const named = session("n", { start: at("10:30:00") });
+		// Its first request in the window comes after the wait ended.
+		const named = session("n", { start: at("10:45:00") });
 		const records = buildRecords({
 			repository: "acme/proj",
 			sessions: [anonymous, named],

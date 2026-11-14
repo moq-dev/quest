@@ -527,7 +527,11 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 					};
 					rows.set(id, row);
 				}
-				const key = `${session.harness}\0${session.session}`;
+				// A session with no ID is told apart by its host and span, which no two sessions of a harness share.
+				const key = JSON.stringify([
+					session.harness,
+					session.session ?? [session.host, session.start, session.end],
+				]);
 				if (!row.seen.has(key)) row.sessions++;
 				row.seen.add(key);
 				// A session on several PRs, as a coordinator is, counts toward each in equal shares.

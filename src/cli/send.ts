@@ -28,7 +28,8 @@ export interface Pending {
 	start: number;
 	/** A fresh ID per stop, naming its own queue file, so a sender removes only the stops it sent. */
 	queued: string;
-	/** The checkout's `origin` on GitHub, as `owner/repo`, and where its quest tree sits below the top level. */
+	/** The checkout's quest root, its `origin` on GitHub as `owner/repo`, and where its quest tree sits below the top level. */
+	root: string;
 	origin: string;
 	prefix: string;
 	endpoint: string;
@@ -190,6 +191,7 @@ export function queue(stopped: Stopped, env: NodeJS.ProcessEnv = process.env): Q
 		session: stopped.session,
 		start,
 		queued,
+		root,
 		origin: repository,
 		prefix: run(["rev-parse", "--show-prefix"]).stdout.trim(),
 		endpoint,
@@ -346,6 +348,7 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 	const notes: string[] = [];
 	for (const group of groups.values()) {
 		const { endpoint, origin, prefix } = group[0]!.pending;
+		const roots = new Set(group.map((q) => q.pending.root));
 		try {
 			const token = tokenFor(endpoint, deps.env);
 			// The user removed the token since the session was queued, or the endpoint refused it: it sends nothing.
@@ -372,19 +375,34 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 				);
 			}
 			const repositories = new Set([origin, key(repository)]);
-			// A sub-agent stops without the stop hook naming it, so each queued session brings its own, unless it
-			// worked in another repository, whose checkout routes its own records.
+			// A sub-agent stops without the stop hook naming it, so each queued session brings its own, routed as
+			// its own checkout routes it: a checkout that still exists must be a queued one's, or name the same origin and
+			// endpoint; for one since deleted, every repository token-max resolved for it must be this group's.
+			const routed = (s: Session): boolean => {
+				if (s.cwd !== null && existsSync(s.cwd)) {
+					const own = questRoot(s.cwd);
+					if (own === null) return false;
+					if (roots.has(own)) return true;
+					const remote = readRemote(own, "origin");
+					const named = remote === null ? null : remoteRepository(remote).repository;
+					try {
+						return named !== null && key(named) === origin && checkoutEndpoint(own) === endpoint;
+					} catch {
+						// A malformed .quest.json routes nowhere, as its own stop would say.
+						return false;
+					}
+				}
+				return (
+					s.repositories !== null &&
+					s.repositories.length > 0 &&
+					s.repositories.every((r) => repositories.has(r))
+				);
+			};
 			for (let grew = true; grew;) {
 				grew = false;
 				for (const s of kept) {
 					const parent = s.parent === null ? undefined : byId.get(`${s.harness}\0${s.parent}`);
-					if (
-						s.id !== null &&
-						!emit.has(s) &&
-						parent !== undefined &&
-						emit.has(parent) &&
-						(s.repositories === null || s.repositories.some((r) => repositories.has(r)))
-					) {
+					if (s.id !== null && !emit.has(s) && parent !== undefined && emit.has(parent) && routed(s)) {
 						emit.add(s);
 						grew = true;
 					}

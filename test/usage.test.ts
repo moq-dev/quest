@@ -661,6 +661,15 @@ describe("usage", () => {
 		return { root, deps, sessions, calls, requests };
 	}
 
+	test("counts each session with no ID apart in the spend rollup", async () => {
+		const { root, deps, sessions } = setup();
+		const known = sessions.find((s) => s.id === CLAUDE)!;
+		const anonymous = [1, 2].map((n) => ({ ...known, id: null, start: known.start + n }));
+		const report = await usage(root, { since: "2026-11-05" }, deps([...sessions, ...anonymous]));
+		const row = report.spend.find((s) => s.role === "implementing" && s.harness === "claude")!;
+		expect([row.sessions, row.cost]).toEqual([3, 15]);
+	});
+
 	test("ties each session to its PR and role, and rolls up spend and accuracy", async () => {
 		const { root, deps, sessions, calls } = setup();
 		const report = await usage(root, { since: "2026-11-05", ssh: ["box"] }, deps(sessions));

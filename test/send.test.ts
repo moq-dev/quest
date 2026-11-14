@@ -230,18 +230,27 @@ test("a session token-max no longer lists is dropped and said, without holding b
 	]);
 });
 
-test("a sub-agent working in another repository is left to its own checkout", async () => {
+test("a sub-agent is sent only where its own checkout routes it", async () => {
 	const env = home();
-	queue(stopped(checkout(ENDPOINT)), env);
+	const root = checkout(ENDPOINT);
+	queue(stopped(root), env);
+	const other = checkout(ENDPOINT);
+	execFileSync("git", ["-C", other, "remote", "set-url", "origin", "https://github.com/acme/fork.git"]);
 	const sessions = [
 		session("s1", "quest/m0/a"),
-		session("here", "quest/m0/a", { parent: "s1" }),
+		// Live checkouts: this one, another of the same origin and endpoint, one opted out, and another origin's.
+		session("here", "quest/m0/a", { parent: "s1", cwd: root }),
+		session("twin", "quest/m0/a", { parent: "s1", cwd: checkout(ENDPOINT) }),
+		session("optedOut", "quest/m0/a", { parent: "s1", cwd: checkout() }),
+		session("fork", "quest/m0/a", { parent: "s1", cwd: other, repositories: ["acme/fork", "acme/proj"] }),
+		// Deleted checkouts: every repository resolved must be this one's.
+		session("gone", "quest/m0/a", { parent: "s1" }),
+		session("goneFork", "quest/m0/a", { parent: "s1", repositories: ["acme/fork", "acme/proj"] }),
 		session("unknown", "quest/m0/a", { parent: "s1", repositories: null }),
-		session("elsewhere", "main", { parent: "s1", repositories: ["acme/other"] }),
 	];
 	const { deps, uploads } = sender(env, 200, sessions);
 	await sendPass(deps);
-	expect(parseUpload(uploads[0]!.body).records.map((r) => r.session)).toEqual(["s1", "here", "unknown"]);
+	expect(parseUpload(uploads[0]!.body).records.map((r) => r.session)).toEqual(["s1", "here", "twin", "gone"]);
 });
 
 test("an origin that a URL rewrite points at GitHub is read as configured", () => {
