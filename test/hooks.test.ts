@@ -260,7 +260,7 @@ test.each([
 		],
 	};
 	// A user's own state, so a sender's failure on this host is never said here; this checkout has no origin.
-	const deps = { env: { XDG_STATE_HOME: tempDir(), XDG_CONFIG_HOME: tempDir() }, send: () => {} };
+	const deps = { env: { XDG_STATE_HOME: tempDir(), XDG_CONFIG_HOME: tempDir() } };
 	const output = JSON.parse(hook(stop, deps));
 	expect(output.decision).toBe("block");
 	expect(output.reason).toContain("- cd repo && quest gate just test");

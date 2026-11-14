@@ -277,7 +277,8 @@ interface HookInput {
 	tool_name?: string;
 	tool_input?: Record<string, unknown>;
 	session_id?: string;
-	transcript_path?: string;
+	/** Null for a session that keeps no transcript. */
+	transcript_path?: string | null;
 	/** Codex's Stop names its turn; Claude Code's does not. */
 	turn_id?: string;
 }
@@ -365,6 +366,8 @@ export function hook(input: unknown, deps: HookDependencies = { env: process.env
  * parent. Says what the person has not seen yet: why nothing is sent, that no sender runs, or a sender's failure.
  */
 function stopped(value: Partial<HookInput>, harness: string, deps: HookDependencies): string {
+	// An ephemeral session, as `codex exec --ephemeral` runs, keeps no transcript, so it has no record to queue.
+	if (value.transcript_path === null) return "";
 	if (typeof value.session_id !== "string" || typeof value.transcript_path !== "string")
 		throw new Error(`expected a Stop hook's JSON input with session_id and transcript_path`);
 	let notices: string[];

@@ -1658,7 +1658,7 @@ its fixes show without tokens.
 When an agent session's turn ends in a checkout that uses Quest, `quest`
 sends Kixel Code one record of it, rebuilt each time, so a resend replaces
 the last and the store follows the session as it grows. The store keeps the
-copy that ends latest, since uploads of one session may arrive out of order. The type is
+latest upload, since one sender sends a session's uploads in order. The type is
 `SessionRecord`, exported from `quest/core` with `parseRecord` and
 `parseUpload`, which refuse a malformed record whole:
 
@@ -1740,10 +1740,13 @@ Each pass runs token-max on this host from the earliest queued session's first
 instant, reads the PRs updated since then, and posts `{"records": [...]}` with
 `Authorization: Bearer <token>`, one upload per endpoint and repository, each
 queued session with its sub-agents, which stop without the hook naming them.
-A 2xx drops the sessions from the queue, unless the hook queued one again
-meanwhile. A 401 or 403 drops them and sends that endpoint nothing more until
-the token changes. Any other failure, token-max missing included, keeps them
-for the next pass, and the next stop says so once.
+Each upload is checked with `parseUpload` before it is posted. A 2xx drops the
+sessions from the queue, unless the hook queued one again meanwhile. A 401 or
+403 drops them and sends that endpoint nothing more until the token changes.
+Any other failure keeps them queued, and the next stop says so once. A failing
+endpoint and repository back off, waiting a minute and doubling up to six
+hours, and sit out the passes meanwhile, so they never widen the others'
+window. token-max missing is retried each pass.
 
 ### Typed messages
 

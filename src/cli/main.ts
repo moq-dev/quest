@@ -1240,7 +1240,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"builds it, from token-max's sessions on this host since the earliest queued session's first instant and " +
 				"the PRs updated since then, and replaces its earlier copy, so a resend never doubles. An endpoint that " +
 				"refuses the token (401 or 403) is sent nothing more until the token changes; any other failure keeps the " +
-				"sessions queued for the next pass, and the next stop hook says so once. Exactly one sender runs per user, " +
+				"sessions queued, retried after a minute and then twice as long each time up to six hours, and the next " +
+				"stop hook says so once. Exactly one sender runs per user, " +
 				"as the service quest records install sets up; start no other.\n\nUses GH_TOKEN, GITHUB_TOKEN, or gh auth token.",
 		)
 		.action(() => {
@@ -1254,6 +1255,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						waits: (since) => readWaits(since),
 						fetch: globalThis.fetch,
 						sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+						now: Date.now,
 						interval: SEND_INTERVAL,
 					},
 					(line) => print(`${new Date().toISOString()} ${line}`),

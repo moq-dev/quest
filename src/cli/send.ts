@@ -7,7 +7,7 @@ import { homedir, setPriority } from "node:os";
 import { dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
-import { type SessionRecord } from "../core";
+import { type SessionRecord, parseUpload } from "../core";
 import { type GitHubDependencies, GitHub } from "../github/client";
 import { baseRepository } from "./claims";
 import { discoveryEnv } from "./git";
@@ -237,8 +237,9 @@ export interface SendDependencies {
 	sessions(since: Date): Session[] | null;
 	waits(since: number): LoggedWait[];
 	fetch: typeof globalThis.fetch;
+	now(): number;
 	sleep(ms: number): Promise<unknown>;
-	/** The time between passes. */
+	/** The time between passes, and a failing group's first wait. */
 	interval: number;
 }
 
@@ -314,7 +315,7 @@ export async function sendPass(deps: SendDependencies): Promise<Sent[]> {
 	} catch (error) {
 		writeFailure(
 			deps.env,
-			`session records were not sent and stay queued for the next pass: ${error instanceof Error ? error.message : String(error)}`,
+			`session records were not sent and stay queued, retried with backoff: ${error instanceof Error ? error.message : String(error)}`,
 		);
 		throw error;
 	}
@@ -327,8 +328,16 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			const path = join(dir, "pending", name);
 			return { path, pending: JSON.parse(readFileSync(path, "utf8")) as Pending };
 		});
-	if (queued.length === 0) return [];
-	const since = Math.min(...queued.map((q) => q.pending.start));
+	const groups = new Map<string, typeof queued>();
+	for (const q of queued) {
+		const id = JSON.stringify([q.pending.endpoint, q.pending.origin, q.pending.prefix]);
+		groups.set(id, [...(groups.get(id) ?? []), q]);
+	}
+	// A group backing off sits the pass out, so it neither reruns token-max nor widens the others' window.
+	for (const id of [...groups.keys()]) if ((readBackoff(deps.env, id)?.next ?? 0) > deps.now()) groups.delete(id);
+	const active = [...groups.values()].flat();
+	if (active.length === 0) return [];
+	const since = Math.min(...active.map((q) => q.pending.start));
 	const exported = deps.sessions(new Date(since));
 	if (exported === null)
 		throw new Error(
@@ -338,15 +347,10 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 	const byId = new Map(kept.flatMap((s) => (s.id === null ? [] : [[`${s.harness}\0${s.id}`, s] as const])));
 	const waits = deps.waits(since);
 	const client = new GitHub(deps.github());
-	const groups = new Map<string, typeof queued>();
-	for (const q of queued) {
-		const id = JSON.stringify([q.pending.endpoint, q.pending.origin, q.pending.prefix]);
-		groups.set(id, [...(groups.get(id) ?? []), q]);
-	}
 	const sent: Sent[] = [];
 	const failures: string[] = [];
 	const notes: string[] = [];
-	for (const group of groups.values()) {
+	for (const [id, group] of groups) {
 		const { endpoint, origin, prefix } = group[0]!.pending;
 		const roots = new Set(group.map((q) => q.pending.root));
 		try {
@@ -428,6 +432,11 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 				since,
 			});
 			const upload = [...records.values()];
+			try {
+				parseUpload({ records: upload });
+			} catch (error) {
+				throw new Error(`this quest built an upload its own parseUpload refuses: ${(error as Error).message}`);
+			}
 			const response = await deps.fetch(endpoint, {
 				method: "POST",
 				headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -435,6 +444,7 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			});
 			if (response.status === 401 || response.status === 403) {
 				refuse(deps.env, endpoint, token);
+				clearBackoff(deps.env, id);
 				for (const q of group) settle(q);
 				notes.push(
 					`${endpoint} refused this host's token (${response.status}), so it is sent no more session records until the token changes`,
@@ -444,16 +454,53 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			}
 			if (!response.ok)
 				throw new Error(`${endpoint} answered ${response.status}: ${(await response.text()).slice(0, 500)}`);
+			clearBackoff(deps.env, id);
 			for (const q of group) settle(q);
 			sent.push({ endpoint, repository: key(repository), records: upload.length, refused: false });
 		} catch (error) {
-			failures.push(`${origin} to ${endpoint}: ${error instanceof Error ? error.message : String(error)}`);
+			const wait = backOff(deps, id);
+			failures.push(
+				`${origin} to ${endpoint}: ${error instanceof Error ? error.message : String(error)} (tried again in ${Math.round(wait / 60_000)} minutes)`,
+			);
 		}
 	}
 	if (failures.length) throw new Error([...notes, ...failures].join("; "));
 	if (notes.length) writeFailure(deps.env, notes.join("; "));
 	else rmSync(join(dir, "failure"), { force: true });
 	return sent;
+}
+
+/** The longest a failing group waits between tries. */
+const MAX_BACKOFF = 6 * 3_600_000;
+
+/** A failing group's consecutive failures and the instant it may next be tried. */
+interface Backoff {
+	failures: number;
+	next: number;
+}
+
+const backoffPath = (env: NodeJS.ProcessEnv, id: string) => join(stateDirectory(env), "backoff", digest(id));
+
+function readBackoff(env: NodeJS.ProcessEnv, id: string): Backoff | null {
+	const path = backoffPath(env, id);
+	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Backoff) : null;
+}
+
+/**
+ * Record another failure of group `id`, doubling its wait from one interval up to `MAX_BACKOFF`, so a rejection that
+ * resending cannot fix, such as a store refusing a newer record, costs a pass a few times a day while its records
+ * stay queued. Returns the wait.
+ */
+function backOff(deps: SendDependencies, id: string): number {
+	const failures = (readBackoff(deps.env, id)?.failures ?? 0) + 1;
+	const wait = Math.min(deps.interval * 2 ** Math.min(failures - 1, 30), MAX_BACKOFF);
+	mkdirSync(join(stateDirectory(deps.env), "backoff"), { recursive: true, mode: 0o700 });
+	writeFileSync(backoffPath(deps.env, id), JSON.stringify({ failures, next: deps.now() + wait } satisfies Backoff));
+	return wait;
+}
+
+function clearBackoff(env: NodeJS.ProcessEnv, id: string): void {
+	rmSync(backoffPath(env, id), { force: true });
 }
 
 /** Whether a checkout still holds `dir` or the nearest of its parents that exists, as `questRoot` finds it. */

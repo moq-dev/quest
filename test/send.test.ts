@@ -88,6 +88,13 @@ const session = (id: string, branch: string, extra: Partial<Session> = {}): Sess
 	...extra,
 });
 
+/** One user's clock, shared by every sender built for it, so a test moves time across passes. */
+const clocks = new WeakMap<NodeJS.ProcessEnv, { now: number }>();
+function clockOf(env: NodeJS.ProcessEnv): { now: number } {
+	if (!clocks.has(env)) clocks.set(env, { now: Date.parse("2026-11-06T12:00:00Z") });
+	return clocks.get(env)!;
+}
+
 /** Sender dependencies whose endpoint answers `status`, recording each upload and token-max's window. */
 function sender(
 	env: NodeJS.ProcessEnv,
@@ -98,6 +105,7 @@ function sender(
 	const uploads: { token: string; body: unknown }[] = [];
 	const windows: Date[] = [];
 	const slept: number[] = [];
+	const clock = clockOf(env);
 	const json = (value: unknown) =>
 		new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
 	const github = async (input: string | URL | Request) => {
@@ -143,8 +151,10 @@ function sender(
 			return sessions;
 		},
 		waits: () => [],
+		now: () => clock.now,
 		sleep: async (ms) => {
 			slept.push(ms);
+			clock.now += ms;
 		},
 		interval: 60_000,
 		fetch: (async (input: string | URL | Request, init?: RequestInit) => {
@@ -157,7 +167,7 @@ function sender(
 			return new Response("", { status: typeof status === "number" ? status : status() });
 		}) as typeof fetch,
 	};
-	return { deps, uploads, windows, slept };
+	return { deps, uploads, windows, slept, clock };
 }
 
 const pending = (env: NodeJS.ProcessEnv) => readdirSync(join(env.XDG_STATE_HOME!, "quest", "records", "pending"));
@@ -190,6 +200,7 @@ test("a failed upload stays queued and is said once; a refused token stops sendi
 	queue(stopped(root), env);
 	const failing = sender(env, 500, [session("s1", "quest/m0/a")]);
 	await expect(sendPass(failing.deps)).rejects.toThrow("answered 500");
+	failing.clock.now += 60_000;
 	expect(pending(env)).toHaveLength(1);
 	const again = queue(stopped(root), env);
 	expect(again.notices).toEqual([expect.stringContaining("answered 500")]);
@@ -213,6 +224,46 @@ test("the sender fails loud without token-max, keeping the queue", async () => {
 	const env = home();
 	queue(stopped(checkout(ENDPOINT)), env);
 	await expect(sendPass(sender(env, 200, null).deps)).rejects.toThrow("token-max is not installed");
+	expect(pending(env)).toHaveLength(1);
+});
+
+test("a failing group backs off, doubling, without widening the others' window", async () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	queue(stopped(root), env);
+	const failing = sender(env, 500, [session("s1", "quest/m0/a")]);
+	await expect(sendPass(failing.deps)).rejects.toThrow("tried again in 1 minutes");
+	// Within its wait, the group sits the pass out: no token-max run, no upload.
+	failing.clock.now += 30_000;
+	expect(await sendPass(failing.deps)).toEqual([]);
+	expect(failing.windows).toHaveLength(1);
+	failing.clock.now += 30_000;
+	await expect(sendPass(failing.deps)).rejects.toThrow("tried again in 2 minutes");
+	failing.clock.now += 60_000;
+	expect(await sendPass(failing.deps)).toEqual([]);
+	// Another repository's stop, queued later, is sent from its own start meanwhile.
+	const other = checkout(ENDPOINT);
+	execFileSync("git", ["-C", other, "remote", "set-url", "origin", "https://github.com/acme/other.git"]);
+	writeFileSync(join(other, "later.jsonl"), `{"type":"user","timestamp":"2026-11-06T11:00:00Z"}\n`);
+	queue({ ...stopped(other), session: "s2", transcript: join(other, "later.jsonl") }, env);
+	const others = sender(env, 200, [session("s2", "main", { repositories: ["acme/other"] })]);
+	// The stand-in GitHub knows no acme/other, so that group fails too, after token-max read only its window.
+	await expect(sendPass(others.deps)).rejects.toThrow("acme/other");
+	expect(others.windows).toEqual([new Date("2026-11-06T11:00:00Z")]);
+	// Once its wait ends, the first group is tried again and sent, and only the other's stop stays queued.
+	failing.clock.now += 60_000;
+	const fixed = sender(env, 200, [session("s1", "quest/m0/a")]);
+	await expect(sendPass(fixed.deps)).rejects.toThrow("acme/other");
+	expect(fixed.uploads).toHaveLength(1);
+	expect(pending(env)).toHaveLength(1);
+});
+
+test("an upload this version's own parseUpload refuses fails on the host, never posted", async () => {
+	const env = home();
+	queue(stopped(checkout(ENDPOINT)), env);
+	const { deps, uploads } = sender(env, 200, [session("s1", "quest/m0/a", { cost: -1 })]);
+	await expect(sendPass(deps)).rejects.toThrow("its own parseUpload refuses");
+	expect(uploads).toEqual([]);
 	expect(pending(env)).toHaveLength(1);
 });
 
@@ -297,6 +348,8 @@ test("Claude Code's and Codex's Stop queue the session", () => {
 		"cannot queue this session's record",
 	);
 	expect(() => hook({ hook_event_name: "Stop", cwd, turn_id: "t1" }, deps)).toThrow("session_id");
+	// An ephemeral Codex session keeps no transcript, so its stop queues nothing.
+	expect(hook({ ...base, session_id: "e1", transcript_path: null, turn_id: "t1" }, deps)).toBe("");
 });
 
 test("the sender passes every interval, records its PID, and outlives a failed pass", async () => {
@@ -305,10 +358,11 @@ test("the sender passes every interval, records its PID, and outlives a failed p
 	const root = checkout(ENDPOINT);
 	queue(stopped(root), env);
 	let status = 500;
-	const { deps, uploads, slept } = sender(env, () => status, [session("s1", "quest/m0/a")]);
+	const { deps, uploads, slept, clock } = sender(env, () => status, [session("s1", "quest/m0/a")]);
 	const log: string[] = [];
 	deps.sleep = async (ms) => {
 		slept.push(ms);
+		clock.now += ms;
 		status = 200;
 		if (slept.length === 3) throw new Error("stopped");
 	};
