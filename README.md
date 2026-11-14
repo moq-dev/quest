@@ -1558,6 +1558,32 @@ the reason of the first to judge it so. The record names it after the base:
 tier, and a reviewer that raised it adds `- Raised the risk to high: <reason>`
 to its block.
 
+### Score the reviewer
+
+`quest eval` scores the reviewer on the repository's past PRs, kept in
+`review-eval.json` at its root: culprits, each with the places at its last head
+of the defect a later fix's `## Caused by` named, and clean PRs that broke
+nothing. Score a change to the reviewer table, the prompts, or `REVIEW.md`
+before it lands, and put the score and its cost in its PR.
+
+```sh
+quest eval add 570 --fix 704 --what "It counts every link as a culprit." \
+  --defect src/cli/usage.ts:395-399 --defect src/cli/usage.ts:408-410
+quest eval add 503 --clean
+quest eval run                          # the size's pick and its shadow on every case
+quest eval run --harness claude --effort high --pr 570
+```
+
+`add` reads the PR's last head and base from GitHub and records its merge base,
+size, latest writer, and tier, and a culprit already in the set gains each
+further defect. `run` reviews each case at its head in a detached checkout,
+giving the reviewers the first round `quest review` gives, with the base's
+`AGENTS.md` and `CLAUDE.md` and this checkout's committed `REVIEW.md`. A
+finding on any line of a defect's places finds it; every finding on a clean PR
+is noise. It prints defects found and clean findings by severity for the pick,
+its shadow, and either, by size and by tier, each case's rounds, and the cost
+token-max prices for the run's sessions.
+
 ## Audit cost and accuracy
 
 `quest usage` reports `origin`'s PRs updated since `--since` (a local

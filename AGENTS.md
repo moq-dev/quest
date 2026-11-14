@@ -24,6 +24,10 @@ Do not edit `CONTRIBUTING.md`, `assets/CONTEXT.md`, `assets/AGENTS.md`, or
   PR, or the standing one /quest-run gives a PR with no user-facing behavior
   change that adds or expands no quests; and only after repository checks and
   reviews pass.
+- A change to the reviewers in `src/cli/models.ts`, the review prompts in
+  `src/cli/review.ts`, or a `REVIEW.md` runs `quest eval run` with the base's
+  build and the head's, and puts both scores and their cost in its PR's
+  `## Validation`.
 - Pull requests land as squash merges.
 - Do not comment on repositories outside kixelated/moq-dev without approval.
 

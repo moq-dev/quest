@@ -66,6 +66,11 @@ Agent's choices, for the implementer to revisit. Each run:
   owns that gate, so it goes in the run PR's `## Follow-ups` for
   `/quest-plan` there, as the guide's Creation section says (user,
   2026-11-11, [routing evidence](/quest/m0/routing-evidence/README.md)).
+- Add each escape classified catchable or maybe to its repository's eval
+  set with `quest eval add`, its defect located at the culprit's head from
+  the fix's diff and confirmed against the culprit's own diff, so `quest
+  eval run` scores reviewers on it. A private repository's set stays in
+  that repository.
 - Before proposing a fix, find the quest, check, or rule that already owns
   the class, and report whether its count fell since that landed. A rule
   whose class still recurs is the case for moving it up a level.
