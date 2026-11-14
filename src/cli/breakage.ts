@@ -18,7 +18,8 @@ export interface Cause {
  * The PRs of `repository` that `body`'s `## Caused by` section names as culprits: each bullet that opens with
  * `[owner/repo#N](url) - why`. A link anywhere else on a line, as context or a "fixed by" aside, names no culprit.
  * A line may end with a parenthesis of either part or both, as `(found by customer; incident <id>)`: who found it,
- * an article allowed, and the incident the fix closes. A culprit named twice keeps its first line.
+ * an article allowed, and the incident the fix closes. Each culprit and incident keeps its first line, and a
+ * culprit whose lines name incidents drops its line naming none.
  */
 export function culprits(body: string, repository: Repository): Cause[] {
 	const heading = /^## Caused by[ \t]*\r?$/m.exec(body);
@@ -35,18 +36,21 @@ export function culprits(body: string, repository: Repository): Cause[] {
 		`\\((?:found by (?:an? |the )?(${FINDERS.join("|")})(?:; |(?=\\))))?(?:incident ([^\\r\\n]+?))?\\)\\s*$`,
 		"i",
 	);
-	const found = new Map<number, Cause>();
+	const found = new Map<string, Cause>();
 	for (const match of section.matchAll(culprit)) {
-		const number = Number(match[1]);
-		if (match[1] !== match[2] || found.has(number)) continue;
-		const [, by, incident] = tail.exec(match[0]) ?? [];
-		found.set(number, {
-			number,
+		if (match[1] !== match[2]) continue;
+		const [, by, named] = tail.exec(match[0]) ?? [];
+		const cause: Cause = {
+			number: Number(match[1]),
 			found: (by?.toLowerCase() as Finder | undefined) ?? null,
-			incident: incident?.trim() || null,
-		});
+			incident: named?.trim() || null,
+		};
+		const id = JSON.stringify([cause.number, cause.incident]);
+		if (!found.has(id)) found.set(id, cause);
 	}
-	return [...found.values()];
+	// A line naming an incident records its culprit's breakage, so the culprit's line naming none would count it twice.
+	const named = new Set([...found.values()].filter((c) => c.incident !== null).map((c) => c.number));
+	return [...found.values()].filter((c) => c.incident !== null || !named.has(c.number));
 }
 
 /**

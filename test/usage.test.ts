@@ -180,6 +180,16 @@ describe("causes", () => {
 		// Only a parenthesis ending the line counts, and only a known finder.
 		expect(read("lost a frame (found by canary) on deploy")).toMatchObject({ found: null, incident: null });
 		expect(read("lost a frame (found by luck)")).toMatchObject({ found: null, incident: null });
+		// One fix closing two incidents of one culprit closes both, its line naming none dropped; the culprit counts once.
+		const lines = body(
+			`- ${link(7)} - lost a frame (incident a)\n- ${link(7)} - again (found by person; incident b)\n- ${link(7)} - plain\n- ${link(7)} - dup (incident a)\n- ${link(8)} - other`,
+		);
+		expect(culprits(lines, repository)).toEqual([
+			{ number: 7, found: null, incident: "a" },
+			{ number: 7, found: "person", incident: "b" },
+			{ number: 8, found: null, incident: null },
+		]);
+		expect(causes(lines, repository)).toEqual([7, 8]);
 	});
 });
 

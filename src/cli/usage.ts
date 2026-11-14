@@ -409,8 +409,9 @@ export async function updatedPulls(client: GitHub, repository: Repository, since
 }
 
 /** The PR numbers of `repository` that `body`'s `## Caused by` section names as culprits, as {@link culprits} reads them. */
-export const causes = (body: string, repository: Repository): number[] =>
-	culprits(body, repository).map((cause) => cause.number);
+export const causes = (body: string, repository: Repository): number[] => [
+	...new Set(culprits(body, repository).map((cause) => cause.number)),
+];
 
 /** PR `number` of `repository`, or null when GitHub has none, as for a mistyped `## Caused by` link. */
 export async function readPull(client: GitHub, repository: Repository, number: number): Promise<Pull | null> {

@@ -1795,7 +1795,8 @@ reported again with `--pr`, or a merged fix names it on its culprit's
 `## Caused by` line, as `(incident https://alerts.example/1)`: the sender then
 sends the fix's breakage under the incident's ID, so it replaces the open one
 as one record holding the culprit, the fix, and the incident. Where several
-fixes name one incident, the one updated last wins. `--found` is one of `check`, `reviewer`, `queue`,
+fixes name one incident, the one updated last wins. One fix closes several incidents of a
+culprit with a line for each. `--found` is one of `check`, `reviewer`, `queue`,
 `canary`, `person`, or `customer`, and `--at` sets when it was found, by
 default now. Reverts and red default-branch runs are not reported here: the
 store reads them from GitHub itself.
