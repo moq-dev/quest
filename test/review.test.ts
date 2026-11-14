@@ -1391,7 +1391,7 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 				"- Reviewer: Codex, gpt-6.1-sol, medium effort",
 				"- Session: `thread-1`, round 1",
 				"- Score: 8/10, `Lands once the off-by-one is fixed.`",
-				"- Rounds: 1; findings 1 (high 1): fixed 0, refuted 0, open 1",
+				"- Rounds: 1; first round 1 (high 1); findings 1 (high 1): fixed 0, refuted 0, open 1",
 				"- Findings, open until the next round settles them:",
 				"  - High, `src/lib.ts:2`: `Off by one`",
 				"",
@@ -1399,7 +1399,7 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 				"- Reviewer: Codex, gpt-6.1-sol, low effort, shadow",
 				"- Session: `thread-1`, round 1",
 				"- Score: 8/10, `Lands once the off-by-one is fixed.`",
-				"- Rounds: 1; findings 1 (high 1): fixed 0, refuted 0, open 1",
+				"- Rounds: 1; first round 1 (high 1); findings 1 (high 1): fixed 0, refuted 0, open 1",
 				"- Findings, open until the next round settles them:",
 				"  - High, `src/lib.ts:2`: `Off by one`",
 				"",
@@ -1432,7 +1432,9 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 		expect(record).toContain("- Session: `thread-1`, round 2\n");
 		expect(record).toContain("- Score: 9/10, `Fixes #3.`\n");
 		// The refuted finding counts beside the new one, across both rounds.
-		expect(record).toContain("- Rounds: 2; findings 2 (high 2): fixed 0, refuted 1, open 1\n");
+		expect(record).toContain(
+			"- Rounds: 2; first round 1 (high 1); findings 2 (high 2): fixed 0, refuted 1, open 1\n",
+		);
 		expect(record).toContain(
 			`  - High, \`src/lib.ts\`: \`\`Ping @someone about \`${base.slice(0, 12)}\` in #12\`\`\n`,
 		);
@@ -2404,6 +2406,8 @@ test("a tally counts each finding once, by who raised it, through every round", 
 			session: "s",
 			rounds: 2,
 			findings: { high: 2, medium: 0, low: 1 },
+			// The first round's findings stay as it reported them, however later rounds settle or regrade them.
+			first: { high: 1, medium: 1, low: 1 },
 			fixed: 1,
 			refuted: 1,
 		},

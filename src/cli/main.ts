@@ -1150,13 +1150,13 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"--ssh host, as token-max sessions exports and prices them, the cost an estimate at each model's API list " +
 				"price; its sub-agents are sessions of their own. Each Claude Code or Codex session belongs to the PR whose " +
 				"head branch it last names, when a repository token-max resolved for it on its own host, or for another " +
-				"session in the same directory there, is this one; no prompt or reply is read out. Its role is " +
-				"classifying when the PR's ## Review record names it as the risk classifier, reviewing when the record names it as a reviewer or Codex marks it a review, implementing when its first " +
+				"session in the same directory there, is this one, else to the PR of the session that spawned it unless its own repository is known to be another; no prompt or reply is read out. Its role is " +
+				"classifying when the PR's ## Review record names it as the risk classifier, reviewing when the record names it as a reviewer or Codex marks it a review, its parent's on the same PR, implementing when its first " +
 				"request since --since came before the PR opened, and iterating otherwise. A session found on several hosts counts once, at its " +
 				"costliest copy, and the report says how many copies it folded from which hosts; a session with a request " +
 				"token-max could not price or a line it could not read is listed, its cost a lower bound. A host that fails fails the report. " +
 				"Each PR also shows its ## Models size, its risk tier from the ## Review record and whether a reviewer raised it, its implementers, and as unread each Implementer line it cannot read, " +
-				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round, marked when it is the shadow, " +
+				"each reviewer the ## Review record names, with its latest round and score and its tally of findings across every round and in its first, marked when it is the shadow, " +
 				"where a merged PR whose last round left only low findings open counts them settled, since the author fixes or refutes those before merge, " +
 				"the later merged PRs whose ## Caused by bullets open with its link, and each online reviewer's record from GitHub: whether it " +
 				"reviewed the last head, and its findings accepted, declined, unclassified, or unanswered. An online reviewer " +
@@ -1164,8 +1164,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"review thread it opens or a [P<n>] line in its review body, and its first answer's first word takes or " +
 				"declines it. Rollups follow: spend by size, role, harness, model, and " +
 				"effort, accuracy by size and implementer, summing each branch's tallies but the shadow's once, where an Implementer line's own size, as (iterate, XS), wins " +
-				"over the PR's, the writer A/B by size and arm, counting a sized PR whose every Implementer line names the same arm, as (arm B), " +
-				"under its first line's writer with the spend of every session on it, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, and each online reviewer's coverage and findings over the merged PRs. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
+				"over the PR's, with its writing cost over the merged PRs it was found on, the writer A/B by size and arm, counting a sized PR whose every Implementer line names the same arm, as (arm B), under its first line's writer with the spend of every session on it, local reviewers by size, harness, model, effort, and shadow, with their " +
+				"tallies and reviewing cost per PR, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, and each online reviewer's coverage and findings over the merged PRs. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
 				"other failures.",
