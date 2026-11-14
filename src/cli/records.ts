@@ -44,8 +44,11 @@ export interface RecordInput {
 	emit?: Set<Session>;
 	/** The window's start, epoch ms: a person's wait that ended before it, like a logged one, is left out. */
 	since: number;
-	/** A local session's time split given its timed waits, or null while it has none; every split is null without it. */
-	split?: (session: Session, waits: SessionWait[]) => TimeSplit | null;
+	/**
+	 * A local session's time split given its timed waits and the window's start, or null while it has none; every
+	 * split is null without it.
+	 */
+	split?: (session: Session, waits: SessionWait[], since: number) => TimeSplit | null;
 }
 
 const id = (harness: string, session: string) => `${harness}\0${session}`;
@@ -169,7 +172,7 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 			start: iso(s.start),
 			end: iso(s.end),
 			waits: timed,
-			split: timed === null || !input.split ? null : input.split(s, timed),
+			split: timed === null || !input.split ? null : input.split(s, timed, input.since),
 		});
 	}
 	return records;

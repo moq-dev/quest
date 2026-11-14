@@ -134,6 +134,34 @@ describe("readSteps", () => {
 		expect(steps.turns.map((t) => t.text)).toEqual(["Do it"]);
 	});
 
+	test("a Codex message the harness injected opens no turn", () => {
+		const path = join(tempDir(), "codex.jsonl");
+		const message = (text: string, provenance?: string[]) => ({
+			type: "response_item",
+			timestamp: at(0),
+			payload: {
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text }],
+				...(provenance && {
+					internal_chat_message_metadata_passthrough: {
+						content_item_metadata: provenance.map((type) => ({ provenance: { type } })),
+					},
+				}),
+			},
+		});
+		writeFileSync(
+			path,
+			lines(
+				message("typed", ["user"]),
+				message("skill text", ["skills"]),
+				message("rules", ["agents_md", "harness"]),
+				message("older log"),
+			),
+		);
+		expect(readSteps("codex", [path]).turns.map((t) => t.text)).toEqual(["typed", "older log"]);
+	});
+
 	test("fails on a harness it cannot read", () => {
 		expect(() => readSteps("cursor", [])).toThrow("cannot read a cursor transcript");
 	});
@@ -215,6 +243,21 @@ describe("splitOf", () => {
 		expect(split.notes).toEqual(["tests failed first"]);
 	});
 
+	test("counts only what falls in the window, keeping the whole session's labels", () => {
+		const steps = readSteps("claude", [claudeTranscript()]);
+		const labeled: Labeled = {
+			digest: "",
+			labels: ["understanding", "testing", "reporting"],
+			notes: [],
+			checks: [],
+			usage: [],
+		};
+		const split = splitOf(steps, labeled, [], Date.parse(at(3)));
+		expect(split.categories.understanding).toEqual({ ms: 0, tokens: 0 });
+		expect(split.categories.testing.ms).toBe(60_000);
+		expect(split.categories.reporting).toEqual({ ms: 120_000, tokens: 5 });
+	});
+
 	test("needs every action labeled", () => {
 		const steps = readSteps("claude", [claudeTranscript()]);
 		expect(() => splitOf(steps, { digest: "", labels: [], notes: [], checks: [], usage: [] }, [])).toThrow(
@@ -269,7 +312,7 @@ describe("labelSession", () => {
 		await labelSession("claude", "s1", readSteps("claude", [path]), deps);
 		expect(asked.filter((a) => a.entries === SPLITTERS)).toHaveLength(2);
 		// The kept labels give the split without a model.
-		const kept = keptSplit(state, { harness: "claude", id: "s1", files: [path] }, []);
+		const kept = keptSplit(state, { harness: "claude", id: "s1", files: [path], skippedLines: 0 }, []);
 		expect(kept?.categories.writing.tokens).toBe(105);
 		expect(kept?.usage[0]).toMatchObject({ model: SPLITTERS[0]!.model, input: expect.any(Number) });
 	});
@@ -304,6 +347,15 @@ describe("labelSession", () => {
 		expect(labeled.usage.map((u) => u.model)).toEqual([SPLITTERS[0]!.model, SPLIT_CHECKERS[0]!.model]);
 	});
 
+	test("a transcript token-max could not read all of has no split", async () => {
+		const state = tempDir();
+		const path = claudeTranscript();
+		const { ask } = fakeAsk();
+		await labelSession("claude", "s1", readSteps("claude", [path]), { ask, state, env: {} });
+		expect(keptSplit(state, { harness: "claude", id: "s1", files: [path], skippedLines: 0 }, [])).not.toBeNull();
+		expect(keptSplit(state, { harness: "claude", id: "s1", files: [path], skippedLines: 1 }, [])).toBeNull();
+	});
+
 	test("a malformed reply fails, keeping no label", async () => {
 		const state = tempDir();
 		const ask = async (entries: readonly Model[]): Promise<Answer> => ({
@@ -315,7 +367,9 @@ describe("labelSession", () => {
 		await expect(
 			labelSession("claude", "s1", readSteps("claude", [claudeTranscript()]), { ask, state, env: {} }),
 		).rejects.toThrow("does not cover");
-		expect(keptSplit(state, { harness: "claude", id: "s1", files: [claudeTranscript()] }, [])).toBeNull();
+		expect(
+			keptSplit(state, { harness: "claude", id: "s1", files: [claudeTranscript()], skippedLines: 0 }, []),
+		).toBeNull();
 		expect(labelsPath(state, "claude", "s1")).toContain("splits");
 	});
 });

@@ -2472,6 +2472,7 @@ test("a question about data alone runs with no tools on either CLI", () => {
 		"features.shell_tool=false",
 		"features.unified_exec=false",
 		'web_search="disabled"',
+		"--skip-git-repo-check",
 	])
 		expect(codex).toContain(off);
 	expect(codexFlags(context)).not.toContain("features.shell_tool=false");

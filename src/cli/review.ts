@@ -757,6 +757,8 @@ const CODEX_NO_TOOLS = [
 	].flatMap((feature) => ["-c", `features.${feature}=false`]),
 	"-c",
 	'web_search="disabled"',
+	// Such a question runs outside any checkout, which Codex otherwise refuses.
+	"--skip-git-repo-check",
 ];
 
 /** Codex takes model settings as TOML values; a JSON string is a valid TOML string. */

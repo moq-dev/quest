@@ -428,7 +428,8 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			// Each session's new steps are labeled before its record is built, so every record carries its split.
 			const labeled = new Map<Session, { steps: Steps; labeled: Labeled }>();
 			for (const s of emit) {
-				if (s.id === null || s.host !== null) continue;
+				// A transcript with lines token-max could not read either is sent unsplit, as it is sent without waits.
+				if (s.id === null || s.host !== null || s.skippedLines > 0) continue;
 				let steps: Steps;
 				try {
 					steps = readSteps(s.harness, s.files);
@@ -448,9 +449,9 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 				waits,
 				emit,
 				since,
-				split: (s, waits) => {
+				split: (s, waits, from) => {
 					const read = labeled.get(s);
-					return read ? splitOf(read.steps, read.labeled, waits) : null;
+					return read ? splitOf(read.steps, read.labeled, waits, from) : null;
 				},
 			});
 			const upload = [...records.values()];

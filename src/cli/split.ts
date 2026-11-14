@@ -195,6 +195,20 @@ function codexCall(item: Record<string, unknown>): string {
 	return `${name}: ${typeof about === "string" ? about : JSON.stringify(about)}`;
 }
 
+/**
+ * Whether a Codex user-role message is one the harness injected, such as a skill, AGENTS.md, or the environment, which
+ * opens no turn: its parts' provenance names no person. A message without provenance, as older logs write, is a turn.
+ */
+function injected(item: Record<string, unknown>): boolean {
+	const passthrough = item.internal_chat_message_metadata_passthrough;
+	const metadata = isObject(passthrough) ? passthrough.content_item_metadata : undefined;
+	if (!Array.isArray(metadata) || metadata.length === 0) return false;
+	const sources = metadata.map((each) =>
+		isObject(each) && isObject(each.provenance) ? each.provenance.type : undefined,
+	);
+	return sources.every((source) => typeof source === "string" && source !== "user");
+}
+
 function readCodex(path: string, into: Builder): void {
 	let total = 0;
 	eachLine(path, (line, complete) => {
@@ -216,7 +230,7 @@ function readCodex(path: string, into: Builder): void {
 		if (item.type === "message") {
 			const text = contentText(item.content);
 			if (item.role === "assistant" && text.trim() !== "") into.action(at, `says: ${text}`);
-			else if (item.role === "user" && text.trim() !== "") into.turn(at, text);
+			else if (item.role === "user" && text.trim() !== "" && !injected(item)) into.turn(at, text);
 		} else if (item.type.endsWith("_call_output")) {
 			const output = typeof item.output === "string" ? item.output : contentText(item.output);
 			into.result(at, String(item.call_id), output, false);
@@ -517,9 +531,11 @@ function merged(waits: SessionWait[]): { start: number; end: number }[] {
 /**
  * The split of a session whose every action is labeled: each stretch between two instants of its transcript goes to
  * the action it ends at, or to idle when a turn's message ends it, less the part a timed wait covers; each action's
- * tokens go to its category. A part labeled twice reports the time the two labeled differently.
+ * tokens go to its category. Only what falls from `since` on counts, as token-max counts a session within its window,
+ * while the labels still come from the whole session. A part labeled twice reports the time the two labeled
+ * differently.
  */
-export function splitOf(steps: Steps, labeled: Labeled, waits: SessionWait[]): TimeSplit {
+export function splitOf(steps: Steps, labeled: Labeled, waits: SessionWait[], since = -Infinity): TimeSplit {
 	if (labeled.labels.length !== steps.actions.length) throw new Error("a split needs every action labeled");
 	const categories = Object.fromEntries(
 		SPLIT_CATEGORIES.map((c) => [c, { ms: 0, tokens: 0 }]),
@@ -531,7 +547,7 @@ export function splitOf(steps: Steps, labeled: Labeled, waits: SessionWait[]): T
 	let disagreed = 0;
 	for (let k = 1; k < steps.marks.length; k++) {
 		const { owner, at } = steps.marks[k]!;
-		const start = steps.marks[k - 1]!.at;
+		const start = Math.max(steps.marks[k - 1]!.at, since);
 		if (at <= start) continue;
 		const ms = uncovered(start, at, timed);
 		categories[owner === "idle" ? "idle" : labeled.labels[owner]!].ms += ms;
@@ -541,7 +557,7 @@ export function splitOf(steps: Steps, labeled: Labeled, waits: SessionWait[]): T
 		if (other !== labeled.labels[owner]) disagreed += ms;
 	}
 	steps.actions.forEach((a, i) => {
-		categories[labeled.labels[i]!].tokens += a.tokens;
+		if (a.at >= since) categories[labeled.labels[i]!].tokens += a.tokens;
 	});
 	return {
 		categories,
@@ -552,15 +568,17 @@ export function splitOf(steps: Steps, labeled: Labeled, waits: SessionWait[]): T
 }
 
 /**
- * The split of a session on this host from the labels kept for it, or null when any action is unlabeled yet or its
- * transcript is gone. It never asks a model, so `quest usage` reads what the sender already paid for.
+ * The split of a session on this host from the labels kept for it, within the window from `since`, or null when any
+ * action is unlabeled yet, its transcript is gone, or token-max could not read all of it. It never asks a model, so `quest usage` reads what the sender already paid for.
  */
 export function keptSplit(
 	state: string,
-	session: { harness: string; id: string | null; files: string[] },
+	session: { harness: string; id: string | null; files: string[]; skippedLines: number },
 	waits: SessionWait[],
+	since?: number,
 ): TimeSplit | null {
-	if (session.id === null) return null;
+	// A transcript with lines token-max could not read either has no split, as it has no waits.
+	if (session.id === null || session.skippedLines > 0) return null;
 	const path = labelsPath(state, session.harness, session.id);
 	// Most sessions in a report were never sent, so their transcripts are not read.
 	if (!existsSync(path)) return null;
@@ -572,5 +590,5 @@ export function keptSplit(
 		throw error;
 	}
 	const labeled = readLabeled(path, steps.actions);
-	return labeled && labeled.labels.length === steps.actions.length ? splitOf(steps, labeled, waits) : null;
+	return labeled && labeled.labels.length === steps.actions.length ? splitOf(steps, labeled, waits, since) : null;
 }

@@ -1418,6 +1418,6 @@ export function usageDependencies(github: ClaimDependencies): UsageDependencies 
 		...github,
 		sessions: runTokenMax,
 		waits: (since) => readWaits(since),
-		split: (session, waits) => keptSplit(state, session, waits),
+		split: (session, waits, since) => keptSplit(state, session, waits, since),
 	};
 }
