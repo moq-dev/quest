@@ -50,6 +50,18 @@ export const REVIEWERS: Record<Size, readonly Model[]> = {
 };
 
 /**
+ * The models that set a PR's risk tier from its diff, ranked: the first whose
+ * CLI is logged in classifies. The tier never depends on who wrote the change,
+ * so the list is the same for every PR, unlike the reviewers'. Haiku is the
+ * cheapest, and the classifier's prompt stays below the 100k input tokens past
+ * which it costs five times as much.
+ */
+export const CLASSIFIERS: readonly Model[] = [
+	{ harness: "claude", model: "claude-haiku-5-5", effort: "low" },
+	sol("low"),
+];
+
+/**
  * The writers that start quest `doc`: its size's list, or the next size's
  * while a `Maintainer:` wait leaves it a decision to settle.
  */

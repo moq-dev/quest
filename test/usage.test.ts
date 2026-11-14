@@ -6,7 +6,7 @@ import { describe, expect, test } from "vitest";
 
 import { implementer } from "../src/cli/models-record";
 import { fixes } from "../src/cli/land-fixer";
-import type { Round, Tally } from "../src/cli/review";
+import type { Risk, Round, Tally } from "../src/cli/review";
 import { parseReview, reviewRecord } from "../src/cli/review-record";
 import { type Priced, parseCcusage, readClaudeLog, readCodexLog, usage, usageLines } from "../src/cli/usage";
 import { tempDir } from "./fixture";
@@ -233,6 +233,12 @@ describe("PR records", () => {
 		fixed,
 		refuted,
 	});
+	const reason = "It changes what the library returns.";
+	const risk: Risk = {
+		tier: "medium",
+		reason,
+		classified: { tier: "medium", reason, by: { kind: "paths" }, usage: [] },
+	};
 	const tallies = [
 		tally("codex", 3, { high: 1, medium: 1, low: 2 }, 2, 1),
 		{ ...tally("codex", 1, { high: 0, medium: 0, low: 0 }, 0, 0), shadow: true as const },
@@ -241,7 +247,7 @@ describe("PR records", () => {
 	];
 
 	test("reads back each reviewer's round and tally quest review records, after the land fixer's lines", () => {
-		const body = `Summary.\n\n## Review\n\nmechanical fix by codex, gpt-6.1-sol, medium effort: \`merged\` (head ${"d".repeat(40)})\n\n${reviewRecord([round, second], tallies)}\n\n## Models\n\n- Size: L\n`;
+		const body = `Summary.\n\n## Review\n\nmechanical fix by codex, gpt-6.1-sol, medium effort: \`merged\` (head ${"d".repeat(40)})\n\n${reviewRecord({ rounds: [round, second], tallies, risk })}\n\n## Models\n\n- Size: L\n`;
 		expect(body).toContain("\n- Rounds: 3; findings 4 (high 1, medium 1, low 2): fixed 2, refuted 1, open 1\n");
 		expect(parseReview(body)).toEqual([
 			{
@@ -304,14 +310,14 @@ describe("PR records", () => {
 		expect(body).not.toContain("b".repeat(40));
 		// Claude's left-out tally still holds an open finding, which keeps it short too.
 		const clean = [{ ...round, findings: [] }, second];
-		expect(reviewRecord(clean, tallies)).not.toContain("b".repeat(40));
+		expect(reviewRecord({ rounds: clean, tallies, risk })).not.toContain("b".repeat(40));
 		const settledAll = [tally("codex", 3, { high: 1, medium: 1, low: 2 }, 3, 1), tallies[1]!];
-		expect(reviewRecord(clean, settledAll)).toContain(`- Head: ${"b".repeat(40)}\n`);
+		expect(reviewRecord({ rounds: clean, tallies: settledAll, risk })).toContain(`- Head: ${"b".repeat(40)}\n`);
 		expect(fixes(body)).toEqual(["codex, gpt-6.1-sol, medium effort"]);
 	});
 
 	test("a record written before tallies has none, and a Rounds line that does not add up fails", () => {
-		const record = reviewRecord([second], [tallies[1]!]);
+		const record = reviewRecord({ rounds: [second], tallies: [tallies[1]!], risk });
 		const older = `## Review\n\n${record.replace(/^- Rounds: .*\n/m, "")}\n`;
 		expect(parseReview(older)[0]!.tally).toBeNull();
 		// The settled count `quest usage` prints reads back.
@@ -357,6 +363,10 @@ describe("PR records", () => {
 });
 
 describe("usage", () => {
+	const RISK = [
+		"- Risk: high, `It rewrites the wire format.`",
+		`- Classified: medium by Claude Code, claude-haiku-5-5, low effort, session \`${OWNED}\``,
+	].join("\n");
 	const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200 });
 	const pr = (number: number, branch: string, body: string, created: string, extra: object = {}) => ({
 		number,
@@ -452,6 +462,8 @@ describe("usage", () => {
 			"",
 			`- Head: ${"b".repeat(40)}`,
 			`- Base: origin/main at ${"a".repeat(12)}`,
+			// A reviewer raised the classifier's tier; the classifier's session counts as classifying.
+			RISK,
 			"",
 			"- Reviewer: Codex, gpt-6.1-sol, high effort",
 			`- Session: \`${THREAD}\`, round 2`,
@@ -474,9 +486,10 @@ describe("usage", () => {
 			"- Reviewer: Codex, gpt-6.1-sol, medium effort, shadow",
 			"- Rounds: 1; findings 3 (high 3): fixed 2, refuted 1, open 0",
 		].join("\n");
-		// #9's record and #10's tally the same branch, so the rollup counts the tally once, from #10.
-		const body9 = `${body10.slice(body10.indexOf("## Review"))}\n\n## Models\n\n- Size: L\n- Implementer: Claude Code, claude-opus-5-5, high effort\n`;
-		const fork13 = body10.slice(body10.indexOf("## Review")).replaceAll(THREAD, "thread-fork");
+		// #9's record and #10's tally the same branch, so the rollup counts the tally once, from #10. Only #10 has a tier.
+		const unrated = body10.slice(body10.indexOf("## Review")).replace(`${RISK}\n`, "");
+		const body9 = `${unrated}\n\n## Models\n\n- Size: L\n- Implementer: Claude Code, claude-opus-5-5, high effort\n`;
+		const fork13 = unrated.replaceAll(THREAD, "thread-fork");
 		const body11 =
 			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n";
 		const pulls = [
@@ -666,7 +679,7 @@ describe("usage", () => {
 			["claude", CLAUDE, "implementing", "high"],
 			["codex", THREAD, "reviewing", "high"],
 			["codex", "11111111-1111-1111-1111-111111111111", "iterating", "high"],
-			["claude", OWNED, "iterating", null],
+			["claude", OWNED, "classifying", null],
 		]);
 		expect(ten.fixedBy).toEqual([11]);
 		expect(ten.implementers).toEqual([
@@ -688,9 +701,9 @@ describe("usage", () => {
 		});
 		expect(report.spend.map((s) => [s.size, s.role, s.harness, s.cost])).toEqual([
 			["L", "implementing", "claude", 5],
-			["L", "iterating", "claude", 7],
 			["L", "iterating", "codex", 2],
 			["L", "reviewing", "codex", 1],
+			["L", "classifying", "claude", 7],
 		]);
 		const tally = {
 			rounds: 2,
@@ -757,7 +770,18 @@ describe("usage", () => {
 		expect(text).toContain(
 			"  review: Codex, gpt-6.1-sol, medium effort, shadow; not in the latest run; rounds 1, findings 3 (high 3): fixed 2, refuted 1, open 0\n",
 		);
-		expect(text).toContain("#10 L merged: PR 10 (quest/m0/a)");
+		expect(text).toContain(
+			"#10 L high merged: PR 10 (quest/m0/a)\n  risk: high, It rewrites the wire format.; raised from medium by a reviewer\n",
+		);
+		expect(text).toContain("#11 - - merged: PR 11 (fix/a)\n");
+		// #10 is the one PR with a tier, and a later PR fixed it; #11, #5, and #6 of the rest merged.
+		expect(report.tiers).toEqual([
+			{ tier: "high", pulls: 1, merged: 1, raised: 1, culprits: 1 },
+			{ tier: null, pulls: 8, merged: 3, raised: 0, culprits: 0 },
+		]);
+		expect(text).toContain(
+			"By risk tier:\n   high  1 PRs, 1 merged, 1 raised by a reviewer, 1 later fixed\n   -     8 PRs, 3 merged, 0 raised by a reviewer, 0 later fixed",
+		);
 		expect(text).toContain("findings 2 (high 1, low 1): fixed 1, refuted 0, settled 1, open 0\n");
 		expect(text).toContain(
 			"online review: rabbit[bot], at the final head; 1 finding: 1 accepted, 0 declined, 0 unclassified, 0 unanswered",

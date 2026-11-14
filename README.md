@@ -285,7 +285,9 @@ binary carries, and reports a missing, outdated, or retired one. A job that
 checks a PR with a binary built from the base passes `--no-stubs`, since that
 binary's skills would reject a PR that changes a stub; the PR's own binary
 checks them in its own `quest check`. This repository's merge queue and
-`quest merge` do so.
+`quest merge` do so. It also reads the repository's [`RISK.md`](#risk-tiers),
+if any, and reports each `## High` item it cannot read, which would otherwise
+fail the next `quest review` on a branch from it.
 
 A link into a submodule that is not checked out, as in a fresh worktree or
 `actions/checkout` by default, resolves at the commit its gitlink pins when a
@@ -483,6 +485,7 @@ mergeable conflicting
 merge-state dirty
 review-decision -
 review-record diff-identical 5f1c2e9a8b7d6c5e4f3a2b1c0d9e8f7a6b5c4d3e
+risk medium diff-identical low It changes when quest gate admits a command.
 auto-merge -
 merge-queue -
 landing-stopped -
@@ -501,6 +504,7 @@ comes last, and a missing value prints as `-`:
 | `url`, `state`, `draft`, `head` | The PR URL; `open`, `closed`, or `merged`; `true` or `false`; the head SHA. |
 | `mergeable`, `merge-state`, `review-decision` | GitHub's values, lowercased. |
 | `review-record` | Whether the PR body's [`## Review` record](#review-locally) still covers the head, and the head it names last: `current` when it is the head, `diff-identical` when `git diff <base>...<head>` prints the same as for it, `stale` otherwise, or `unknown` when GitHub cannot compare them, such as a diff too large; `-` when the record names no full SHA. Whose record counts is the reader's call. |
+| `risk` | The record's [risk tier](#risk-tiers), `low`, `medium`, or `high`; the same state as `review-record` for the head it names; the tier its classifier set before any reviewer raised it; and the reason. `-` when the record names none. |
 | `auto-merge` | Method, who enabled it, when, and the head it was enabled on. |
 | `merge-queue` | Queue state, position, and when it was enqueued. |
 | `landing-stopped` | The reason the latest merge-queue entry, auto-merge, or [`quest land`](#the-watchers-own-queue) queue entry ended (such as `merge_conflict`, `failed_checks`, `manual`, `manually_disabled`, or `merged`), who ended it, and when; `-` once the PR has entered the merge queue or auto-merge again since. |
@@ -1418,22 +1422,29 @@ root and in each directory holding a changed path, never the checkout's, so a
 change cannot instruct its own reviewer. The base's `REVIEW.md` is optional,
 given at the start of each session, and chooses the review's stance, such as adversarial.
 
-It prints the size and its source, base, and head, then for each reviewer its
+It prints the size and its source, base, and head; the head's `risk` tier and
+reason, then `classified` with the classifier's tier, how it was set (`model`,
+`paths`, or `default`), and reason, and for a model a `classifier` line with its
+harness, model, effort, and session, and its `usage` line; then for each reviewer its
 harness, model, and effort, session, round,
-an `unchanged` line for a repeated round, a `usage` line per turn (input tokens, the part read from the prompt cache, and output), the
+an `unchanged` line for a repeated round, a `usage` line per turn (input tokens, the part read from the prompt cache, and output),
+the score, a `raised` line with the tier and reason when it raised the classifier's, the
 finding count, then each finding as its number, severity, `path:line`, and title over its
 indented body, then `earlier` with the last round's head and its findings, each
 as its number, disposition, severity, `path:line`, and title over its reason; last
 come a `record` line and a `next` line. `--json` prints one object with
 `rounds`, one per reviewer, `tallies`, every reviewer's findings across the
-branch's rounds, `record`, and `next`.
+branch's rounds, `risk`, the head's tier with its classification, `record`,
+and `next`.
 
 After each round, `quest review` rewrites the `## Review` section of the open PR
 from the branch into the base, found among the upstream's PRs from the
 repository the base's remote pushes to, and prints `record <url>`. The record
-names the reviewed head and the base's short SHA, then for each reviewer its
+names the reviewed head and the base's short SHA, the head's risk tier and who
+classified it, then for each reviewer its
 harness, model, and effort, its Reviewer line ending in `, shadow` for the
-shadow, the session and round, the score and rationale, its tally, each finding with
+shadow, the session and round, the score and rationale, the tier it raised the
+risk to and why, its tally, each finding with
 its location, and the last round's findings with their dispositions. The
 tally, as `- Rounds: 3; findings 4 (high 1, medium 3): fixed 3, refuted 1, open 0`,
 counts the reviewer's rounds on the branch and each finding it raised once,
@@ -1467,6 +1478,57 @@ and Codex, sent to `OPENAI_BASE_URL`, gives up on the gateway's 429 after its
 own retries, which also counts as the limit there.
 `/quest-review` runs the rounds and marks the PR ready.
 
+### Risk tiers
+
+Each head also gets a risk tier, `low`, `medium`, or `high`: what could break,
+for whom, and how hard it is to undo, set from the change and never from who
+wrote it. Nothing acts on the tier yet; `quest status` and `quest usage` report
+it.
+
+A change is `high`, with no model, when a changed path on either side of a
+rename matches a pattern held high: `RISK.md` itself, everything under
+`.github/workflows/` and `.github/actions/`, and each pattern in the `## High`
+list of the base's `RISK.md`, at the repository's root:
+
+```markdown
+# Risk
+
+Customers run the relay and the player; the CLI is for contributors.
+
+## High
+
+- `src/billing/` - charges customers, and refunds are manual
+- `**/*.proto` - peers on older releases read the wire format
+```
+
+Each item is a backticked path from the root, where `*` and `?` stay within one
+segment, a whole `**` segment spans any number, and a matched directory covers
+everything under it, then ` - ` and why changing it is high. The rest of the
+file is prose for the classifier, such as what is customer-facing. `quest
+review` reads the file from the base's tip, so a change cannot lower its own
+tier, and fails on one it cannot read, which the repository's own `quest check`
+reports first. A base with no `RISK.md` makes every change no path holds high
+`medium`.
+
+Otherwise a classifier reads the diff and the base's `RISK.md` in one read-only
+turn and replies with a tier and one sentence on why: Claude Code
+`claude-haiku-5-5` at low effort, or Codex `gpt-6.1-sol` at low when Claude
+Code is missing or logged out. A diff past 200,000 characters gives it only the
+stat, and it reads the parts it needs. The tier is kept with the reviewers'
+sessions, so a later round on the same head and base `RISK.md` reuses it, and
+`--new` classifies again. Each reviewer judges the tier too, told the
+classified one, and can only raise it: the head's tier is the riskiest, with
+the reason of the first to judge it so. The record names it after the base:
+
+```markdown
+- Risk: high, `It changes the record format quest status parses.`
+- Classified: medium by Claude Code, claude-haiku-5-5, low effort, session `5b0e6c1a-27d4-4f8e-9a51-3c2d7e8f9b10`
+```
+
+`Classified:` names `the always-high paths` or `default` when no model set the
+tier, and a reviewer that raised it adds `- Raised the risk to high: <reason>`
+to its block.
+
 ## Audit cost and accuracy
 
 `quest usage` reports `origin`'s PRs updated since `--since` (a local
@@ -1478,14 +1540,16 @@ at what token cost, and how the work went.
 $ quest usage --pr 569
 moq-dev/quest, PRs updated and sessions active since 2026-11-06; costs (~$) estimate API list prices
 
-#569 S merged: quest: finish model routing (quest/m0/model-routing/README)
+#569 S medium merged: quest: finish model routing (quest/m0/model-routing/README)
+  risk: medium, It changes which model reviews each PR size.
   implementer: Claude Code, claude-opus-5-5, unknown effort
   review: Codex, gpt-6.1-sol, medium effort; round 1, score 10/10; rounds 1, findings 0: fixed 0, refuted 0, open 0
   online review: review (OpenAI), not at the final head; 0 findings: 0 accepted, 0 declined, 0 unclassified, 0 unanswered
   land fixes: codex, gpt-6.1-sol, medium effort
   sessions:
-     implementing  claude  claude-opus-5-5  low     in 50, cache 36.2k written 1.1M read, out 6.1k, ~$0.63
-     reviewing     codex   gpt-6.1-sol      medium  in 14.7k, cache 0 written 39.8k read, out 421, ~$0.04
+     implementing  claude  claude-opus-5-5   low     in 50, cache 36.2k written 1.1M read, out 6.1k, ~$0.63
+     reviewing     codex   gpt-6.1-sol       medium  in 14.7k, cache 0 written 39.8k read, out 421, ~$0.04
+     classifying   claude  claude-haiku-5-5  low     in 9.2k, cache 0 written 0 read, out 38, ~$0.00
 ```
 
 [ccusage](https://github.com/ccusage/ccusage)'s `session --json` reads and
@@ -1497,9 +1561,11 @@ branch, directory, remote, start time, and effort from `$CLAUDE_CONFIG_DIR` (or
 prompt or reply. Since another repository may use the same branch name, the
 session must also be this repository's, as its Codex log, its checkout's
 remotes, or, once the checkout is deleted, a Codex log for that exact directory
-names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is reviewing when the PR's `## Review` record names
-it or Codex marks it a review, implementing when it began before the PR opened,
-and iterating otherwise. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
+names (never a parent's, which a nested clone may not share); otherwise it stays unattributed. A session is classifying when the PR's `## Review` record names
+it as the [risk classifier](#risk-tiers), reviewing when the record names it as a reviewer
+or Codex marks it a review, implementing when it began before the PR opened,
+and iterating otherwise. Each PR shows its `## Models` size, its risk tier and
+whether a reviewer raised it, and its implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
 `quest review` record names, with its latest round and score and its tally of
 findings across every round, marked `shadow` for the shadow, where a merged PR whose last round left only low
 findings open counts them settled, since `/quest-review` fixes or refutes those
@@ -1529,7 +1595,9 @@ findings measure an effort step rather than the writer. Since a branch's tallies
 PR whose record holds its latest tally, by the most rounds and then the newest,
 counts them, and a record written before tallies
 counts as unreviewed. An `Implementer:` line's own size, as
-`(iterate, XS)`, counts over the PR's; and, over the merged PRs, each online
+`(iterate, XS)`, counts over the PR's; each risk tier's PRs, how many merged,
+how many a reviewer raised, and how many a later PR's `## Caused by` names,
+which shows whether the tiers predict what breaks; and, over the merged PRs, each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
 answers. Sessions on no PR here, from any
 repository or agent ccusage reads, total on an `Unattributed` line. `--pr` and

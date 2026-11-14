@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readdirSync, readSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type Size, SIZES, handedBack, questBranch } from "../core";
+import { type RecordedRisk, type Size, SIZES, TIERS, type Tier, handedBack, questBranch, recordedRisk } from "../core";
 import { recorded } from "./models-record";
 import { type ClaimDependencies, upstream } from "./claims";
 import { repositoryPath } from "../github/client";
@@ -47,7 +47,7 @@ export interface SessionLog {
 	review: boolean;
 }
 
-export type Role = "implementing" | "iterating" | "reviewing";
+export type Role = "implementing" | "iterating" | "reviewing" | "classifying";
 
 /** One session attributed to a PR. */
 export interface SessionRow {
@@ -76,6 +76,8 @@ export interface PullRow {
 	unread: string[];
 	/** Each reviewer the PR's `## Review` record names, with its latest round and its tally. */
 	review: ReviewSummary[];
+	/** The risk tier the record names for its head, null when it names none. */
+	risk: RecordedRisk | null;
 	/** Who made each mechanical fix the land fixer recorded, or `quest land watch` for a base merge it made alone. */
 	landFixes: string[];
 	/** Later PRs that list it under `## Caused by`. */
@@ -117,6 +119,17 @@ export interface AccuracyRow {
 }
 
 /** One online reviewer over the merged PRs reported. */
+/** The PRs of one risk tier, or of none (`tier` null): how many merged, how many a reviewer raised, and later fixed. */
+export interface TierRow {
+	tier: Tier | null;
+	pulls: number;
+	merged: number;
+	/** PRs a reviewer judged riskier than the classifier did. */
+	raised: number;
+	/** PRs a later PR names under `## Caused by`. */
+	culprits: number;
+}
+
 export interface OnlineRow {
 	reviewer: string;
 	/** Merged PRs reported, whether or not it reviewed them. */
@@ -139,6 +152,7 @@ export interface Usage {
 	pulls: PullRow[];
 	spend: SpendRow[];
 	accuracy: AccuracyRow[];
+	tiers: TierRow[];
 	online: OnlineRow[];
 	/** The sessions on no PR reported here, from every repository and agent ccusage reads; null when narrowed. */
 	unattributed: ({ sessions: number } & Tokens) | null;
@@ -452,6 +466,7 @@ function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 			),
 			unread: own.implementers.filter(({ fields }) => fields === null).map(({ item }) => item),
 			review: settledOnMerge(parseReview(each.body), each.state === "merged"),
+			risk: recordedRisk(each.body),
 			landFixes: fixes(each.body),
 			fixedBy: (fixedBy.get(each.number) ?? []).sort((a, b) => a - b),
 			online: [],
@@ -514,15 +529,16 @@ function owners(logs: (SessionLog | null)[]): (cwd: string) => string[] | null {
 /**
  * Attribute each priced session to the PR whose head branch its log last named, among those still open when the
  * session reached the branch and headed from the repository its log, checkout, or directory names, and give it a
- * role: reviewing when a PR's review record names it or Codex marks it a review, implementing when it began before
- * its PR opened, and iterating otherwise. Returns the sessions on no PR here.
+ * role: classifying when a PR's review record names it as the risk classifier, reviewing when the record names it
+ * as a reviewer or Codex marks it a review, implementing when it began before its PR opened, and iterating
+ * otherwise. Returns the sessions on no PR here.
  */
 function attribute(
 	sessions: Priced[],
 	logs: (SessionLog | null)[],
 	pulls: Pull[],
 	rows: Map<number, PullRow>,
-	reviewers: Set<string>,
+	recorded: { reviewers: Set<string>; classifiers: Set<string> },
 ): Priced[] {
 	const byBranch = new Map<string, Pull[]>();
 	for (const each of [...pulls].sort((a, b) => a.created - b.created))
@@ -558,8 +574,9 @@ function attribute(
 		row.sessions.push({
 			harness: session.harness,
 			session: id,
-			role:
-				log.review || reviewers.has(id)
+			role: recorded.classifiers.has(id)
+				? "classifying"
+				: log.review || recorded.reviewers.has(id)
 					? "reviewing"
 					: log.started < found.created
 						? "implementing"
@@ -593,7 +610,7 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 				row.sessions++;
 				add(row, spent);
 			}
-	const roles: Role[] = ["implementing", "iterating", "reviewing"];
+	const roles: Role[] = ["implementing", "iterating", "reviewing", "classifying"];
 	return [...rows.values()].sort((a, b) =>
 		order(
 			[a.size, roles.indexOf(a.role), a.harness, a.model, a.effort],
@@ -691,6 +708,23 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 	);
 }
 
+/** One row per risk tier among `pulls`, lowest first, and PRs with none last. */
+function tierRows(pulls: PullRow[]): TierRow[] {
+	return [...TIERS, null].flatMap((tier) => {
+		const rows = pulls.filter((each) => (each.risk?.tier ?? null) === tier);
+		if (rows.length === 0) return [];
+		return [
+			{
+				tier,
+				pulls: rows.length,
+				merged: rows.filter((each) => each.state === "merged").length,
+				raised: rows.filter((each) => each.risk !== null && each.risk.tier !== each.risk.classified).length,
+				culprits: rows.filter((each) => each.fixedBy.length > 0).length,
+			},
+		];
+	});
+}
+
 function onlineRows(pulls: PullRow[]): OnlineRow[] {
 	const merged = pulls.filter((each) => each.state === "merged");
 	const rows = new Map<string, OnlineRow>();
@@ -761,7 +795,8 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 	if (priced !== null) {
 		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
 		const reviewers = new Set(allRows.flatMap((row) => row.review.flatMap((review) => review.session ?? [])));
-		const left = attribute(priced, sessionLogs(priced, deps), all, byNumber, reviewers);
+		const classifiers = new Set(allRows.flatMap((row) => row.risk?.session ?? []));
+		const left = attribute(priced, sessionLogs(priced, deps), all, byNumber, { reviewers, classifiers });
 		if (!narrowed) {
 			unattributed = { sessions: left.length, ...zero() };
 			for (const session of left) for (const spent of session.models) add(unattributed, spent);
@@ -780,6 +815,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		pulls: rows,
 		spend: spendRows(rows),
 		accuracy: accuracyRows(rows),
+		tiers: tierRows(rows),
 		online: onlineRows(rows),
 		unattributed,
 	};
@@ -818,7 +854,14 @@ export function usageLines(report: Usage): string[] {
 	];
 	for (const row of report.pulls) {
 		const state = `${row.state}${row.draft ? (row.handedBack ? " draft, handed back" : " draft") : ""}`;
-		lines.push("", `#${row.number} ${row.size ?? "-"} ${state}: ${row.title} (${row.branch})`);
+		lines.push(
+			"",
+			`#${row.number} ${row.size ?? "-"} ${row.risk?.tier ?? "-"} ${state}: ${row.title} (${row.branch})`,
+		);
+		if (row.risk)
+			lines.push(
+				`  risk: ${row.risk.tier}, ${row.risk.reason}${row.risk.tier === row.risk.classified ? "" : `; raised from ${row.risk.classified} by a reviewer`}`,
+			);
 		for (const i of row.implementers)
 			lines.push(`  implementer: ${i.harness}, ${i.model}, ${i.effort} effort${i.size ? ` (${i.size})` : ""}`);
 		for (const item of row.unread) lines.push(`  unread: ${item}`);
@@ -864,6 +907,18 @@ export function usageLines(report: Usage): string[] {
 					a.model,
 					a.effort,
 					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: score ${mean(a.score, a.scored)}, rounds ${mean(a.tally.rounds, a.reviewed)}, ${findingsText(a.tally)}; ${a.landFixes} land fixes, ${a.fixes} later fixes`,
+				]),
+			),
+		);
+	if (report.tiers.length)
+		lines.push(
+			"",
+			"By risk tier:",
+			...table(
+				report.tiers.map((t) => [
+					" ",
+					t.tier ?? "-",
+					`${t.pulls} PRs, ${t.merged} merged, ${t.raised} raised by a reviewer, ${t.culprits} later fixed`,
 				]),
 			),
 		);
