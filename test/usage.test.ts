@@ -8,6 +8,7 @@ import { implementer } from "../src/cli/models-record";
 import { fixes } from "../src/cli/land-fixer";
 import type { Risk, Round, Tally } from "../src/cli/review";
 import { classifierSessions, parseReview, reviewRecord, reviewSessions } from "../src/cli/review-record";
+import { culprits } from "../src/cli/breakage";
 import { type Session, causes, fold, parseSessions, share, usage, usageLines } from "../src/cli/usage";
 import type { LoggedWait } from "../src/cli/waits";
 import { tempDir } from "./fixture";
@@ -165,6 +166,20 @@ describe("causes", () => {
 			7, 8,
 		]);
 		expect(causes(`- ${link(7)} - outside the section`, repository)).toEqual([]);
+	});
+
+	test("reads who found it and the incident it closes from the parenthesis ending the line", () => {
+		const read = (line: string) => culprits(body(`- ${link(7)} - ${line}`), repository)[0];
+		expect(read("lost a frame (found by canary; incident https://alerts.example/1)")).toEqual({
+			number: 7,
+			found: "canary",
+			incident: "https://alerts.example/1",
+		});
+		expect(read("lost a frame (incident deploy 42)\r")).toMatchObject({ found: null, incident: "deploy 42" });
+		expect(read("lost a frame (found by the Queue)")).toMatchObject({ found: "queue", incident: null });
+		// Only a parenthesis ending the line counts, and only a known finder.
+		expect(read("lost a frame (found by canary) on deploy")).toMatchObject({ found: null, incident: null });
+		expect(read("lost a frame (found by luck)")).toMatchObject({ found: null, incident: null });
 	});
 });
 
@@ -608,7 +623,7 @@ describe("usage", () => {
 		// #11 also names #2, older than the window and read on its own, which a customer found, and #99, which is no PR.
 		const body11 =
 			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n" +
-			"- [acme/proj#2](https://github.com/acme/proj/pull/2) - dropped a header (found by a customer)\n" +
+			"- [acme/proj#2](https://github.com/acme/proj/pull/2) - dropped a header (found by a customer; incident page 7)\n" +
 			"- [acme/proj#99](https://github.com/acme/proj/pull/99) - mistyped\n";
 		const body2 =
 			"Old.\n\n## Models\n\n- Size: XS\n- Implementer: Codex, gpt-6.1-sol, low effort\n\n## Review\n\nRewritten by `quest review` after each round.\n\n- Risk: garbled\n";
@@ -958,6 +973,7 @@ describe("usage", () => {
 			[10, 11, null, "2026-11-06T20:00:00.000Z"],
 			[2, 11, "customer", "2026-11-06T20:00:00.000Z"],
 		]);
+		expect(report.breakages.map((b) => b.incident)).toEqual([null, "page 7"]);
 		expect(report.breakages[1]!.culprit).toEqual({
 			number: 2,
 			merged: "2026-10-20T00:00:00.000Z",
@@ -970,7 +986,7 @@ describe("usage", () => {
 		expect(text).toContain(
 			"Breakages, by the merged fix naming its culprit under ## Caused by:\n" +
 				"   #10  high, L, written by claude-opus-5-5 high, gpt-6.1-sol medium, reviewed by gpt-6.1-sol high, gemini-3-pro high, claude-opus-5-5 high, gpt-6.1-sol medium; fixed by #11, finder unrecorded, opened before it merged\n" +
-				"   #2   no tier, XS, written by gpt-6.1-sol low, no local review; fixed by #11, found by customer, 17.8d after merge\n",
+				"   #2   no tier, XS, written by gpt-6.1-sol low, no local review; fixed by #11, closing incident page 7, found by customer, 17.8d after merge\n",
 		);
 		// #10 is the one PR with a tier, and a later PR fixed it; #11, #5, and #6 of the rest merged.
 		expect(report.tiers).toEqual([

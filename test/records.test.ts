@@ -132,13 +132,14 @@ describe("parseBreakage", () => {
 			breakage(),
 			breakage({ fix: null, incident: "https://alerts.example/1", culprit: null, found: "canary" }),
 			breakage({ fix: null, incident: "deploy 42", found: null }),
+			// A fix closing an incident.
+			breakage({ incident: "deploy 42" }),
 		])
 			expect(parseBreakage(JSON.parse(JSON.stringify(sent)))).toEqual(sent);
 	});
 
 	test.each([
-		["neither fix nor incident", breakage({ fix: null }), "neither or both"],
-		["both fix and incident", breakage({ incident: "x" }), "neither or both"],
+		["neither fix nor incident", breakage({ fix: null }), "neither a fix nor an incident"],
 		["a fix with no culprit", breakage({ culprit: null }), "names no culprit"],
 		["a PR fixing itself", breakage({ fix: 5 }), "fixes itself"],
 		["an unknown finder", breakage({ found: "luck" as never }), "how it was found"],
@@ -162,6 +163,10 @@ describe("parseBreakage", () => {
 		).toHaveLength(3);
 		expect(() => parseUpload({ records: [], breakages: [breakage(), breakage()] })).toThrow("breakage twice");
 		expect(() => parseUpload({ records: [], breakages: [closed, open] })).toThrow("breakage twice");
+		// A fix closing the incident replaces it, so the two never travel together.
+		expect(() => parseUpload({ records: [], breakages: [open, breakage({ incident: "i1" })] })).toThrow(
+			"breakage twice",
+		);
 	});
 });
 

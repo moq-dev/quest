@@ -593,3 +593,24 @@ test("an incident reported from a subdirectory as `.`, as with no --root, finds 
 		process.chdir(before);
 	}
 });
+
+test("a merged fix naming an open incident sends one record under the incident, once however many name it", async () => {
+	const env = home();
+	queue(stopped(checkout(ENDPOINT)), env);
+	const fix = (number: number, updated: string) => ({
+		...CULPRIT,
+		number,
+		head: { ref: `fix/${number}`, repo: { full_name: "acme/proj" } },
+		merged_at: updated,
+		created_at: "2026-11-06T10:20:00Z",
+		updated_at: updated,
+		closed_at: updated,
+		body: "## Caused by\n\n- [acme/proj#3](https://github.com/acme/proj/pull/3) - lost a frame (found by canary; incident deploy 42)\n",
+	});
+	const pulls = [fix(9, "2026-11-06T10:55:00Z"), fix(8, "2026-11-06T10:50:00Z")];
+	const { deps, uploads } = sender(env, 200, [session("s1", "quest/m0/a")], () => {}, pulls);
+	await sendPass(deps);
+	expect(parseUpload(uploads[0]!.body).breakages.map((b) => [b.culprit?.number, b.fix, b.incident, b.found])).toEqual(
+		[[3, 9, "deploy 42", "canary"]],
+	);
+});

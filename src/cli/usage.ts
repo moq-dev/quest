@@ -24,7 +24,7 @@ import {
 	severityText,
 } from "./review-record";
 import { SEVERITIES } from "./review";
-import { type BreakageRecord, ROLES, type Role, type Seat, type SessionRecord, WAIT_KINDS } from "../core";
+import { type BreakageRecord, ROLES, breakageKey, type Role, type Seat, type SessionRecord, WAIT_KINDS } from "../core";
 import { buildRecords } from "./records";
 import { type LoggedWait, readWaits } from "./waits";
 
@@ -419,26 +419,31 @@ export async function readPull(client: GitHub, repository: Repository, number: n
 }
 
 /**
- * A breakage for each culprit the merged PRs among `pulls` name under `## Caused by`, found when the fix opened. A
- * culprit outside `pulls` is read from GitHub, once each; a link to no PR names no culprit.
+ * A breakage for each culprit the merged PRs among `pulls` name under `## Caused by`, found when the fix opened, with
+ * the incident its line closes. A culprit outside `pulls` is read from GitHub, once each; a link to no PR names no
+ * culprit. An incident several lines close keeps the line of the fix updated last, so no body can send one twice.
  */
 export async function fixBreakages(client: GitHub, repository: Repository, pulls: Pull[]): Promise<BreakageRecord[]> {
 	const known = new Map<number, Pull | null>(pulls.map((each) => [each.number, each]));
 	const breakages: BreakageRecord[] = [];
+	const seen = new Set<string>();
+	// GitHub lists the newest update first.
 	for (const fix of pulls.filter((each) => each.state === "merged"))
 		for (const cause of culprits(fix.body, repository)) {
 			if (cause.number === fix.number) continue;
 			if (!known.has(cause.number)) known.set(cause.number, await readPull(client, repository, cause.number));
 			const culprit = known.get(cause.number);
 			if (!culprit) continue;
-			breakages.push({
+			const breakage: BreakageRecord = {
 				repository: key(repository),
 				culprit: culpritOf(culprit),
 				fix: fix.number,
-				incident: null,
+				incident: cause.incident,
 				found: cause.found,
 				at: new Date(fix.created).toISOString(),
-			});
+			};
+			if (!seen.has(breakageKey(breakage))) breakages.push(breakage);
+			seen.add(breakageKey(breakage));
 		}
 	return breakages;
 }
@@ -1131,7 +1136,7 @@ function breakageText(b: BreakageRecord): string {
 			: ms < 0
 				? "opened before it merged"
 				: `${ms >= 172_800_000 ? `${(ms / 86_400_000).toFixed(1)}d` : duration(ms)} after merge`;
-	return `${made}; fixed by #${b.fix}, ${b.found ? `found by ${b.found}` : "finder unrecorded"}, ${after}`;
+	return `${made}; fixed by #${b.fix}${b.incident ? `, closing incident ${b.incident}` : ""}, ${b.found ? `found by ${b.found}` : "finder unrecorded"}, ${after}`;
 }
 
 /** Seconds under a minute, hours past two, else minutes. */

@@ -1197,7 +1197,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"declines it. Rollups follow: spend by size, role, harness, model, and " +
 				"effort, accuracy by size and implementer, summing each branch's tallies but the shadow's once, where an Implementer line's own size, as (iterate, XS), wins " +
 				"over the PR's, with its writing cost over the merged PRs it was found on, the writer A/B by size and arm, counting a sized PR whose every Implementer line names the same arm, as (arm B), under its first line's writer with the spend of every session on it, local reviewers by size, harness, model, effort, and shadow, with their " +
-				"tallies and reviewing cost per PR, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, each online reviewer's coverage and findings over the merged PRs, and each breakage a merged PR in the window names under ## Caused by: its culprit's tier, size, writers, and local reviewers, read from GitHub when older than the window, who found it when the line ends with (found by check|reviewer|queue|canary|person|customer), and how long after the culprit merged the fix opened. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
+				"tallies and reviewing cost per PR, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, each online reviewer's coverage and findings over the merged PRs, and each breakage a merged PR in the window names under ## Caused by: its culprit's tier, size, writers, and local reviewers, read from GitHub when older than the window, who found it and the incident it closes when the line ends with (found by check|reviewer|queue|canary|person|customer; incident <id>), either part alone allowed, and how long after the culprit merged the fix opened. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
 				"other failures.",
@@ -1276,7 +1276,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Post one breakage to the endpoint this checkout's " +
 				`${CHECKOUT_CONFIG} names, with the token ${tokensPath()} pairs with it, as {"records": [], "breakages": [...]}. ` +
 				"Without --pr the incident is open, its culprit unknown; report the same ID again with --pr to close it on " +
-				"its culprit, whose tier, size, writers, and local reviewers are read from its PR body. It posts at once " +
+				"its culprit, whose tier, size, writers, and local reviewers are read from its PR body, or name it on the " +
+				"culprit's ## Caused by line of the fix, as (incident <id>), whose record then replaces it. It posts at once " +
 				"and retries nothing, for a deploy or alert to call.\n\nUses GH_TOKEN, GITHUB_TOKEN, or gh auth token. " +
 				"Exits 0 when the endpoint took it, 2 for invalid arguments, and 1 for other failures, refusal included.",
 		)

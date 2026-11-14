@@ -6,17 +6,19 @@ import { recorded } from "./models-record";
 import { parseReview } from "./review-record";
 import type { Pull } from "./usage";
 
-/** One culprit a `## Caused by` section names, and who or what found the breakage when its line says. */
+/** One culprit a `## Caused by` section names, and who or what found the breakage and its incident, when its line says. */
 export interface Cause {
 	number: number;
 	found: Finder | null;
+	/** The ID of the incident the fix closes, as `quest records incident` reported it. */
+	incident: string | null;
 }
 
 /**
  * The PRs of `repository` that `body`'s `## Caused by` section names as culprits: each bullet that opens with
  * `[owner/repo#N](url) - why`. A link anywhere else on a line, as context or a "fixed by" aside, names no culprit.
- * A line ending its why with `(found by customer)`, or any finder, an article allowed, says who found it; a culprit named twice keeps
- * its first line.
+ * A line may end with a parenthesis of either part or both, as `(found by customer; incident <id>)`: who found it,
+ * an article allowed, and the incident the fix closes. A culprit named twice keeps its first line.
  */
 export function culprits(body: string, repository: Repository): Cause[] {
 	const heading = /^## Caused by[ \t]*\r?$/m.exec(body);
@@ -29,13 +31,22 @@ export function culprits(body: string, repository: Repository): Cause[] {
 		`^- \\[${name}#(\\d+)\\]\\(https://github\\.com/${name}/pull/(\\d+)\\) - \\S[^\\r\\n]*`,
 		"gim",
 	);
-	const finder = new RegExp(`\\(found by (?:an? |the )?(${FINDERS.join("|")})\\)`, "i");
-	const found = new Map<number, Finder | null>();
+	const tail = new RegExp(
+		`\\((?:found by (?:an? |the )?(${FINDERS.join("|")})(?:; |(?=\\))))?(?:incident ([^\\r\\n]+?))?\\)\\s*$`,
+		"i",
+	);
+	const found = new Map<number, Cause>();
 	for (const match of section.matchAll(culprit)) {
-		if (match[1] !== match[2] || found.has(Number(match[1]))) continue;
-		found.set(Number(match[1]), (finder.exec(match[0])?.[1]?.toLowerCase() as Finder | undefined) ?? null);
+		const number = Number(match[1]);
+		if (match[1] !== match[2] || found.has(number)) continue;
+		const [, by, incident] = tail.exec(match[0]) ?? [];
+		found.set(number, {
+			number,
+			found: (by?.toLowerCase() as Finder | undefined) ?? null,
+			incident: incident?.trim() || null,
+		});
 	}
-	return [...found].map(([number, by]) => ({ number, found: by }));
+	return [...found.values()];
 }
 
 /**

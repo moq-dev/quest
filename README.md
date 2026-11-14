@@ -1653,9 +1653,10 @@ how many a reviewer raised, and how many a later PR's `## Caused by` names
 show whether the tiers predict what breaks. Each breakage a merged PR in the
 window names under `## Caused by` follows on its own line, by culprit, even one
 older than the window, which is read from GitHub: the culprit's tier, size,
-writers, and local reviewers, who found it when the bullet ends with
-`(found by check|reviewer|queue|canary|person|customer)` as the rules ask,
-and how long after the culprit merged the fix opened. Over the merged
+writers, and local reviewers, who found it and the incident it closes when
+the bullet ends with
+`(found by check|reviewer|queue|canary|person|customer; incident <id>)` as the
+rules ask, either part alone allowed, and how long after the culprit merged the fix opened. Over the merged
 PRs come each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
 answers. A hand-back counts only while its draft is open, so a merged PR
@@ -1788,9 +1789,13 @@ $ quest records incident https://alerts.example/1 --found canary --pr 42
 reported https://alerts.example/1 against #42
 ```
 
-The ID is the reporter's, and a report with the same ID replaces the last, so
-an incident stays open until it is reported again with `--pr`, and the store
-counts open ones apart. `--found` is one of `check`, `reviewer`, `queue`,
+The ID is the reporter's, and a report with the same ID replaces the last. An
+incident stays open, and the store counts open ones apart, until it is
+reported again with `--pr`, or a merged fix names it on its culprit's
+`## Caused by` line, as `(incident https://alerts.example/1)`: the sender then
+sends the fix's breakage under the incident's ID, so it replaces the open one
+as one record holding the culprit, the fix, and the incident. Where several
+fixes name one incident, the one updated last wins. `--found` is one of `check`, `reviewer`, `queue`,
 `canary`, `person`, or `customer`, and `--at` sets when it was found, by
 default now. Reverts and red default-branch runs are not reported here: the
 store reads them from GitHub itself.

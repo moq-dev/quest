@@ -32,21 +32,23 @@ export interface Culprit {
 }
 
 /**
- * One breakage. A fix's is keyed by its repository, culprit, and fix, and an incident's by its repository and ID, so a
- * resend replaces it: reporting an open incident again with its culprit closes it.
+ * One breakage. One naming an incident is keyed by its repository and that ID, else by its repository, culprit, and
+ * fix, so a resend replaces it. An open incident closes when it is reported again with its culprit, or when a merged
+ * fix's `## Caused by` names it: the fix's record, holding culprit, fix, and incident, then replaces it. A store
+ * replacing an incident keeps its earlier `at`, and its finder when the fix names none, since the fix opened later.
  */
 export interface BreakageRecord {
 	/** The culprit's repository as lowercase `owner/repo`. */
 	repository: string;
 	/** Null only for an incident whose culprit is not known yet. */
 	culprit: Culprit | null;
-	/** The PR naming the culprit under `## Caused by`, or null for an incident. */
+	/** The PR naming the culprit under `## Caused by`, or null for an incident a fix has not closed. */
 	fix: number | null;
-	/** The ID its reporter gave an incident, such as the alert's URL, or null for a fix. */
+	/** The ID its reporter gave an incident, such as the alert's URL, or null for a fix naming no incident. */
 	incident: string | null;
 	/** Null when the fix's `## Caused by` line does not say. */
 	found: Finder | null;
-	/** When it was found, ISO 8601 UTC: the fix PR's opening, or the incident's report. */
+	/** When it was found, ISO 8601 UTC: the incident's report, else the fix PR's opening. */
 	at: string;
 }
 
@@ -77,7 +79,7 @@ function culprit(value: unknown): Culprit {
 	};
 }
 
-/** `value` as a breakage, failing on any missing, extra, or ill-typed field, or one that is neither fix nor incident. */
+/** `value` as a breakage, failing on any missing, extra, or ill-typed field, or one naming neither fix nor incident. */
 export function parseBreakage(value: unknown): BreakageRecord {
 	if (!isObject(value)) return fail("not an object");
 	exact(value, ["repository", "culprit", "fix", "incident", "found", "at"], "the breakage");
@@ -91,7 +93,7 @@ export function parseBreakage(value: unknown): BreakageRecord {
 		found: value.found === null ? null : oneOf(value.found, FINDERS, "how it was found"),
 		at: instant(value.at, "when it was found"),
 	};
-	if ((record.fix === null) === (record.incident === null)) fail("it names neither or both of a fix and an incident");
+	if (record.fix === null && record.incident === null) fail("it names neither a fix nor an incident");
 	if (record.fix !== null && record.culprit === null) fail("a fix names no culprit");
 	if (record.fix !== null && record.fix === record.culprit?.number) fail("a PR fixes itself");
 	return record;
