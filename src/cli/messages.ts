@@ -224,14 +224,13 @@ export function readClaudeMessages(
 	const entries: Entry[] = [];
 	let skill: string | null = null;
 	eachLine(path, (line, complete) => {
-		// Only these lines can hold a typed turn, a skill, or an answer, so the far larger rest are never parsed. Those
-		// are counted as skipped only when their shape shows they cannot be a whole record, such as one cut short.
+		// Only these lines can hold a typed turn, a skill, or an answer; the rest are parsed only to count malformed ones.
 		if (
 			!line.includes('"human"') &&
 			!line.includes("Base directory for this skill") &&
 			!line.includes('"answers"')
 		) {
-			if (complete && skip && !(line.startsWith("{") && line.trimEnd().endsWith("}"))) skip();
+			if (skip) parseLine(path, line, complete, skip);
 			return;
 		}
 		const record = parseLine(path, line, complete, skip);
