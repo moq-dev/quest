@@ -1184,7 +1184,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			const found = messages(options.since ?? daysBefore(new Date(), 7), {
 				env: process.env,
 				home: homedir(),
-				warn: (line) => console.error(`quest: ${line}`),
+				warn,
 			});
 			if (options.json) print(JSON.stringify(found));
 			else for (const line of messageLines(found)) print(line);
