@@ -15,6 +15,7 @@ import { discoveryEnv } from "./git";
 import { readRemote, remoteRepository } from "./github";
 import { eachLine } from "./messages";
 import { questRoot } from "./rules";
+import { type Labeled, type SplitDependencies, type Steps, labelSession, readSteps, splitOf } from "./split";
 import { type Pull, type Session, fixBreakages, fold, key, readPull, sessionRecords, updatedPulls } from "./usage";
 import { type LoggedWait } from "./waits";
 
@@ -237,6 +238,8 @@ export interface SendDependencies {
 	/** token-max's sessions on this host since an instant, or null when it is not installed. */
 	sessions(since: Date): Session[] | null;
 	waits(since: number): LoggedWait[];
+	/** Asks the models that split each session's time. */
+	ask: SplitDependencies["ask"];
 	fetch: typeof globalThis.fetch;
 	now(): number;
 	sleep(ms: number): Promise<unknown>;
@@ -431,6 +434,29 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 				}
 			}
 			if (emit.size === 0) continue;
+			// Each session's new steps are labeled before its record is built, so its record carries its split.
+			const labeled = new Map<Session, { steps: Steps; labeled: Labeled }>();
+			for (const s of emit) {
+				// A transcript with lines token-max could not read either is sent unsplit, as it is sent without waits.
+				if (s.id === null || s.host !== null || s.skippedLines > 0) continue;
+				// Labeling never holds a record back: a session whose transcript reads in a shape quest does not know, or
+				// that no model could label, is sent unsplit and said, and its next stop tries the parts still unlabeled.
+				try {
+					const steps = readSteps(s.harness, s.files);
+					const labels = await labelSession(s.harness, s.id, steps, {
+						ask: deps.ask,
+						state: dir,
+						env: deps.env,
+					});
+					labeled.set(s, { steps, labeled: labels });
+				} catch (error) {
+					// A transcript deleted since token-max read it has no split to say.
+					if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+					notes.push(
+						`${s.harness} session ${s.id} was sent without its time split: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
+			}
 			const records = sessionRecords({
 				repository: key(repository),
 				sessions: kept,
@@ -439,6 +465,10 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 				waits,
 				emit,
 				since,
+				split: (s, waits, from) => {
+					const read = labeled.get(s);
+					return read ? splitOf(read.steps, read.labeled, waits, from) : null;
+				},
 			});
 			const upload: RecordUpload = {
 				records: [...records.values()],

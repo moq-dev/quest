@@ -38,6 +38,7 @@ const record = (extra: Partial<SessionRecord> = {}): SessionRecord => ({
 	waits: [
 		{ kind: "pull", start: "2026-11-06T10:10:00.000Z", end: "2026-11-06T10:20:00.000Z", until: "checks:passed" },
 	],
+	split: null,
 	...extra,
 });
 

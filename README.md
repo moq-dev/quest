@@ -1579,6 +1579,9 @@ moq-dev/quest, PRs updated and sessions active since 2026-11-06; costs (~$) esti
      implementing  local  claude  claude-opus-5-5   low     in 50, cache 36.2k written 1.1M read, out 6.1k, ~$0.63
      reviewing     local  codex   gpt-6.1-sol       medium  in 14.7k, cache 0 written 39.8k read, out 421, ~$0.04
      classifying   local  claude  claude-haiku-5-5  low     in 9.2k, cache 0 written 0 read, out 38, ~$0.00
+  waits: gate-run 4m, pull 12m
+  time: writing 9m (41%), understanding 6m (27%), testing 4m (18%), reporting 3m (14%), idle 2m
+  went wrong (implementing): the first test run failed on a stale build and was rerun after rebuilding
 ```
 
 [token-max](https://github.com/kixel-ai/token-max)'s `sessions` reads and
@@ -1666,7 +1669,10 @@ repository or agent token-max reads, total on an `Unattributed` line. `--pr` and
 `--quest` narrow the report to one PR or one quest's branch, and `--json`
 prints it as one object. Without `token-max` on `PATH`, it says how to install
 it and reports the PRs' records alone. Each PR's `waits:` line sums its
-sessions' waits by kind, a shared session's in its share.
+sessions' waits by kind, a shared session's in its share, and its `time:` line
+their [time splits](#time-splits) the same way, with each note on what went
+wrong; a `Time by role` rollup sums each role's splits, how much of the time a
+checker labeled again it labeled differently, and what labeling took.
 
 `--ssh HOST`, repeatable, also reads that SSH destination's sessions through
 the token-max installed there, matching each through the repositories resolved
@@ -1689,7 +1695,7 @@ latest upload, since one sender sends a session's uploads in order. The type is
 `parseUpload`, which refuse a malformed record whole:
 
 ```json
-{"harness":"claude","session":"7ef44bda-fb9b-436f-9ed8-9013d0f38d46","parent":null,"repository":"acme/app","branch":"quest/m0/login","quest":"quest/m0/login.md","pulls":[42],"role":"implementing","models":[{"model":"claude-opus-5-5","effort":"high","input":230,"cacheWrite":211500,"cacheRead":15800000,"output":88800,"cost":6.64,"complete":true}],"cost":6.64,"complete":true,"start":"2026-11-14T00:06:12.270Z","end":"2026-11-14T00:31:40.120Z","waits":[{"kind":"gate-queue","start":"2026-11-14T00:22:07.386Z","end":"2026-11-14T00:22:07.402Z","until":null}]}
+{"harness":"claude","session":"7ef44bda-fb9b-436f-9ed8-9013d0f38d46","parent":null,"repository":"acme/app","branch":"quest/m0/login","quest":"quest/m0/login.md","pulls":[42],"role":"implementing","models":[{"model":"claude-opus-5-5","effort":"high","input":230,"cacheWrite":211500,"cacheRead":15800000,"output":88800,"cost":6.64,"complete":true}],"cost":6.64,"complete":true,"start":"2026-11-14T00:06:12.270Z","end":"2026-11-14T00:31:40.120Z","waits":[{"kind":"gate-queue","start":"2026-11-14T00:22:07.386Z","end":"2026-11-14T00:22:07.402Z","until":null}],"split":null}
 ```
 
 - `pulls` are the PRs it worked on, attributed as `quest usage` attributes
@@ -1721,10 +1727,13 @@ latest upload, since one sender sends a session's uploads in order. The type is
   session on another host in `quest usage --ssh`, or one whose transcript has
   lines token-max could not read either. Like token costs, waits count only
   those that ended since the window's start.
+- `split` is where the rest of its time went, as the next section describes;
+  null until every step is labeled, and for a session on another host.
 
 The record holds no prompt, reply, or transcript text: skills and questions
 are read from the transcript on this host, and only their names and times
-leave it.
+leave it. The split's notes are lines a model wrote, told to name no one and
+quote no message.
 
 A checkout names its endpoint in a committed `.quest.json`:
 
@@ -1765,7 +1774,8 @@ once per outage.
 Each pass runs token-max on this host from the earliest queued session's first
 instant, reads the PRs updated since then, or since its last upload for that
 endpoint and repository read them, if earlier, so a fix merged after its
-sessions were sent still goes with the next one, and posts
+sessions were sent still goes with the next one, labels each session's new
+steps for its [time split](#time-splits), and posts
 `{"records": [...], "breakages": [...]}`, the breakages being those the merged
 PRs among them name under `## Caused by`, as `quest usage` reports them, with
 `Authorization: Bearer <token>`, one upload per endpoint and repository, each
@@ -1800,6 +1810,34 @@ culprit with a line for each. `--found` is one of `check`, `reviewer`, `queue`,
 `canary`, `person`, or `customer`, and `--at` sets when it was found, as
 an ISO 8601 date and time with a `Z` or offset, by default now. Reverts and red default-branch runs are not reported here: the
 store reads them from GitHub itself.
+
+### Time splits
+
+Before the sender builds a record, a cheap model, Claude Haiku at low effort,
+else Codex's `gpt-6.1-sol` at low, labels each step of the session's
+transcript it has not labeled yet: each tool call or message, with its time
+and a trimmed result, sorted into a fixed list of categories: `understanding`,
+`researching`, `writing`, `testing`, `environment`, `git`, `forge`,
+`reviewing`, `rework`, `coordinating`, `operating`, `reporting`, `circles`
+(going in circles), `waiting`, and `other`. `idle`, the time between turns, is
+measured, never judged. Each stretch of the transcript goes to the step it
+ends at, less the part a timed wait covers, so the categories and the timed
+waits sum to the transcript's span and the categories' tokens to its tokens,
+whatever the model judges. Each part also gets one line on what went wrong,
+if anything did, cut to 300 characters. A reply that is not labels covering
+every step of its part passes the part to the next model. About one part in
+ten is labeled again by a stronger model, Claude Sonnet at medium else
+`gpt-6.1-sol` at medium, and the split reports the time the two labeled
+differently, so the classifier has a known error; a check no model could give
+leaves its part unchecked. The split's `usage` is what labeling took, by model,
+unusable replies included.
+
+The labels are kept under `$XDG_STATE_HOME/quest/records/splits`, so each stop
+labels only the new steps, and `quest usage` reads them without asking a model.
+The transcript text reaches only the labeling model, never the store. Labeling
+never holds a record back: a session no model could label, such as with every
+model logged out, is sent without its split, the next stop says why, and the
+session's next stop labels the steps still unlabeled.
 
 ### Typed messages
 

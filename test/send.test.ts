@@ -162,6 +162,9 @@ function sender(
 			return sessions;
 		},
 		waits: () => [],
+		ask: async () => {
+			throw new Error("no model can label here");
+		},
 		now: () => clock.now,
 		sleep: async (ms) => {
 			slept.push(ms);
@@ -219,6 +222,53 @@ test("the sender posts each queued session with its sub-agents, from its transcr
 		["s1", [7], "implementing", "quest/m0/a.md"],
 		["sub", [7], "implementing", "quest/m0/a.md"],
 	]);
+	expect(pending(env)).toEqual([]);
+});
+
+test("the sender labels each session's steps and sends its split; one no model could label is sent unsplit", async () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	queue(stopped(root), env);
+	const file = join(tempDir(), "s1.jsonl");
+	writeFileSync(
+		file,
+		[
+			{ type: "user", timestamp: "2026-11-06T10:00:00Z", message: { content: "Go" } },
+			{
+				type: "assistant",
+				timestamp: "2026-11-06T10:05:00Z",
+				message: { content: [{ type: "text", text: "Hi" }] },
+			},
+		]
+			.map((r) => JSON.stringify(r))
+			.join("\n") + "\n",
+	);
+	const sessions = [session("s1", "quest/m0/a", { files: [file] })];
+	// Labeling never holds the record back: it is sent unsplit, the queue settles, and the next stop says why.
+	const failing = sender(env, 200, sessions);
+	expect(await sendPass(failing.deps)).toEqual([
+		{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, breakages: 0, refused: false },
+	]);
+	expect(parseUpload(failing.uploads[0]!.body).records[0]!.split).toBeNull();
+	expect(pending(env)).toEqual([]);
+	expect(queue(stopped(root), env).notices).toEqual([
+		expect.stringContaining("claude session s1 was sent without its time split: no model can label here"),
+	]);
+	// The next stop labels it.
+	const { deps, uploads } = sender(env, 200, sessions);
+	deps.ask = async (entries, question) => {
+		const usage = { input: 5, cached: 0, output: 1 };
+		return {
+			entry: entries[0]!,
+			session: "x",
+			value: question.parse({ ranges: [{ from: 0, to: 0, category: "writing" }], note: "" }),
+			usage,
+			spent: [{ entry: entries[0]!, usage }],
+		};
+	};
+	await sendPass(deps);
+	const [record] = parseUpload(uploads[0]!.body).records;
+	expect(record!.split?.categories.writing.ms).toBe(300_000);
 	expect(pending(env)).toEqual([]);
 });
 
