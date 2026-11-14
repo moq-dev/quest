@@ -45,11 +45,6 @@ Agent's choices, for the implementer to revisit:
 - Keep names of customers and private repositories out of anything this
   public repository's records or PRs show.
 
-## Required
-
-- [Send each session's record to Kixel Code](/quest/m0/benchmark/records.md) -
-  the record type and the sending path breakage records reuse
-
 ## Related
 
 - [Mistake audit](/quest/m0/mistake-audit.md) - classifies each escape as

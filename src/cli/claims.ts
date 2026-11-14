@@ -72,9 +72,7 @@ export async function upstream(root: string, remote: Remote, deps: ClaimDependen
 			: (await repositoryInfo(client, pushed)).repository;
 	// The README where this checkout's tree sits, which may be below the top level.
 	const prefix = git(root, ["rev-parse", "--show-prefix"]);
-	let up = self;
-	while (up.parent !== null && (await has(client, up.parent, `${prefix}quest/README.md`)))
-		up = await repositoryInfo(client, up.parent);
+	const up = await base(client, self, prefix);
 	return {
 		// Reach an ancestor the way the remote is reached, so the same credentials work.
 		git: up === self ? remote.name : /^https:/.test(source.url) ? up.https : up.ssh,
@@ -83,6 +81,21 @@ export async function upstream(root: string, remote: Remote, deps: ClaimDependen
 		},
 		github: { client, repository: up.repository, head, defaultBranch: up.defaultBranch, prefix },
 	};
+}
+
+type Info = Awaited<ReturnType<typeof repositoryInfo>>;
+
+/** `self`, or the nearest fork ancestor whose default branch keeps the quest tree at `prefix`. */
+async function base(client: GitHub, self: Info, prefix: string): Promise<Info> {
+	let up = self;
+	while (up.parent !== null && (await has(client, up.parent, `${prefix}quest/README.md`)))
+		up = await repositoryInfo(client, up.parent);
+	return up;
+}
+
+/** The repository a checkout of `repository`, whose tree sits at `prefix`, opens its PRs on, as `upstream` finds it. */
+export async function baseRepository(client: GitHub, repository: Repository, prefix: string): Promise<Repository> {
+	return (await base(client, await repositoryInfo(client, repository), prefix)).repository;
 }
 
 /** A repository as GitHub names it, its default branch and clone URLs, and its parent when it is a fork. */

@@ -160,6 +160,30 @@ export interface ReviewSummary {
 const MARK = "Rewritten by `quest review` after each round.";
 
 /**
+ * The reviewer sessions `body`'s `## Review` record names, read from its `Session:` lines alone, so a record whose
+ * other lines this version cannot parse, as one a newer `quest review` wrote, still names them.
+ */
+export function reviewSessions(body: string): string[] {
+	const section = reviewSection(body);
+	if (!section) return [];
+	const all = body.slice(section.start, section.end);
+	const at = all.indexOf(MARK);
+	if (at < 0) return [];
+	return [...all.slice(at).matchAll(/^- Session: (`+) ?(.*?) ?\1(?:, round \d+)?\r?$/gm)].map((found) => found[2]!);
+}
+
+/**
+ * The risk classifier session `body`'s `## Review` record names, read from its `Classified:` line alone, as
+ * `reviewSessions` reads reviewers.
+ */
+export function classifierSessions(body: string): string[] {
+	const section = reviewSection(body);
+	if (!section) return [];
+	const found = /^- Classified: \S+ by .*, session (`+) ?(.*?) ?\1\r?$/m.exec(body.slice(section.start, section.end));
+	return found ? [found[2]!] : [];
+}
+
+/**
  * Each reviewer's latest round `body`'s `## Review` section records, or none when `quest review` wrote none
  * there, as when the section records a skipped review or only the land fixer's fixes.
  */

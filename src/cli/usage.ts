@@ -13,8 +13,19 @@ import { MERGER } from "./land-watch-fix";
 import { githubRepository, requireRemote } from "./github";
 import { type GitHub, type ObjectValue, type Repository, link } from "../github/client";
 import { type OnlineReview, readOnlineReviews } from "../github/online-review";
-import { type Counts, type ReviewSummary, findingsText, parseReview, severityText } from "./review-record";
+import {
+	type Counts,
+	type ReviewSummary,
+	classifierSessions,
+	findingsText,
+	parseReview,
+	reviewSessions,
+	severityText,
+} from "./review-record";
 import { SEVERITIES } from "./review";
+import { ROLES, type Role, type SessionRecord, WAIT_KINDS } from "../core";
+import { buildRecords } from "./records";
+import { type LoggedWait, readWaits } from "./waits";
 
 /** A session's tokens, and their cost at the model's API list price, which subscriptions do not bill. */
 export interface Tokens {
@@ -45,28 +56,21 @@ export interface Session {
 	repositories: string[] | null;
 	/** Each branch it named, with the first and last time, in epoch milliseconds. */
 	branches: { name: string; first: number; last: number }[];
-	/** Epoch milliseconds of its first request in the window. */
+	/** Epoch milliseconds of its first and last request in the window. */
 	start: number;
+	end: number;
 	models: Spent[];
 	cost: number;
 	/** False when its cost is a lower bound: a request went unpriced, or a line was unreadable or unfinished. */
 	complete: boolean;
 	/** Transcript lines token-max could not read, which its cost leaves out. */
 	skippedLines: number;
+	/** Its transcript files, on its host. */
+	files: string[];
 }
 
-export type Role = "implementing" | "iterating" | "reviewing" | "classifying";
-
-/** One session attributed to a PR. */
-export interface SessionRow {
-	host: string | null;
-	harness: string;
-	session: string | null;
-	/** The session that spawned it, as a sub-agent's. */
-	parent: string | null;
-	role: Role;
-	models: Spent[];
-}
+/** One session's record, on a PR it worked on, and the host it was read on, or null for this one. */
+export type SessionRow = SessionRecord & { host: string | null };
 /** One PR's record and the sessions that worked on it. */
 export interface PullRow {
 	number: number;
@@ -226,6 +230,8 @@ export interface UsageOptions {
 export interface UsageDependencies extends ClaimDependencies {
 	/** token-max's sessions since an instant on this host and each SSH destination, or null when it is not installed. */
 	sessions(since: Date, ssh: string[]): Session[] | null;
+	/** The waits logged on this host that ended since an instant, epoch ms. */
+	waits(since: number): LoggedWait[];
 }
 
 /** The install hint printed when token-max is missing. */
@@ -302,6 +308,7 @@ export function parseSessions(text: string): Session[] {
 					last: time(b.last, "a branch's last time"),
 				})),
 				start: time(row.start, "a start"),
+				end: time(row.end, "an end"),
 				models: models.map((m: Record<string, unknown>) => ({
 					model: optional(m?.model, "a model"),
 					effort: optional(m.effort, "an effort"),
@@ -315,6 +322,9 @@ export function parseSessions(text: string): Session[] {
 				cost: count(row.costUsd, "a cost"),
 				complete,
 				skippedLines: count(row.skippedLines, "a skipped line count"),
+				files: (Array.isArray(row.files) ? row.files : fail("a file list")).map((f: unknown) =>
+					word(f, "a file"),
+				),
 			};
 		});
 }
@@ -340,7 +350,8 @@ export function fold(sessions: Session[]): { kept: Session[]; dropped: Session[]
 	return { kept, dropped };
 }
 
-interface Pull {
+/** A PR as `quest usage` reads it from GitHub. */
+export interface Pull {
 	number: number;
 	url: string;
 	title: string;
@@ -354,7 +365,8 @@ interface Pull {
 	body: string;
 }
 
-const key = (repository: Repository) => `${repository.owner}/${repository.repo}`.toLowerCase();
+/** `repository` as lowercase `owner/repo`. */
+export const key = (repository: Repository) => `${repository.owner}/${repository.repo}`.toLowerCase();
 
 function pull(row: ObjectValue): Pull {
 	const head = row.head as ObjectValue;
@@ -375,7 +387,7 @@ function pull(row: ObjectValue): Pull {
 }
 
 /** The PRs of `repository` updated since `since`, newest update first, read until the listing passes it. */
-async function updatedPulls(client: GitHub, repository: Repository, since: number): Promise<Pull[]> {
+export async function updatedPulls(client: GitHub, repository: Repository, since: number): Promise<Pull[]> {
 	const pulls: Pull[] = [];
 	let next: string | undefined =
 		`${repositoryPath(repository)}/pulls?state=all&sort=updated&direction=desc&per_page=100`;
@@ -493,29 +505,24 @@ function owners(sessions: Session[]): (session: Session) => string[] | null {
 }
 
 /**
- * Attribute each session to the PR whose head branch it last named, among those still open when the session
- * reached the branch and headed from a repository its host resolved for it, else to its parent's PR, as a sub-agent
- * in a detached checkout, unless its repository is known to be another. Give it a role: classifying when a PR's review record names it as the risk classifier,
- * reviewing when the record names it as a reviewer or Codex marks it a review, its parent's when both share the PR,
- * as a review's sub-agents do, else implementing when its first request in the window came before its PR opened,
- * and iterating otherwise. `evidence` holds every exported copy, folded ones included, since a dropped copy may be
- * the only one naming its directory's repository. Returns the sessions it gave a PR in `rows`, and those on no PR here.
+ * The PR each session's own branch heads: the one whose head branch it last named, among those still open when the
+ * session reached the branch and headed from a repository its host resolved for it. `evidence` holds every exported
+ * copy, folded ones included, since a dropped copy may be the only one naming its directory's repository.
  */
 function attribute(
 	sessions: Session[],
 	evidence: Session[],
 	pulls: Pull[],
-	rows: Map<number, PullRow>,
-	recorded: { reviewers: Set<string>; classifiers: Set<string> },
-): { attributed: Session[]; unattributed: Session[] } {
+): { own: Map<Session, Pull>; known: (session: Session) => string[] | null } {
 	const byBranch = new Map<string, Pull[]>();
 	for (const each of [...pulls].sort((a, b) => a.created - b.created))
 		byBranch.set(each.branch, [...(byBranch.get(each.branch) ?? []), each]);
+	const own = new Map<Session, Pull>();
 	const owned = owners(evidence);
-	const own = (session: Session): Pull | undefined => {
+	for (const session of sessions) {
 		// Another repository may use the same branch name, so a session counts only where its repository is known.
 		const known = owned(session);
-		if (known === null) return undefined;
+		if (known === null) continue;
 		for (const seen of [...session.branches].sort((a, b) => b.last - a.last)) {
 			// A branch can head a new PR after an earlier one closed: take the one open when the session reached it.
 			const open = (byBranch.get(seen.name) ?? []).filter(
@@ -526,69 +533,61 @@ function attribute(
 			);
 			// A checkout with remotes for both a fork and its upstream cannot tell which one's branch it was on.
 			if (new Set(open.map((each) => each.repository)).size > 1) continue;
-			if (open[0]) return open[0];
+			const found = open[0];
+			if (found) {
+				own.set(session, found);
+				break;
+			}
 		}
-		return undefined;
-	};
-	const id = (harness: string, session: string | null) => JSON.stringify([harness, session]);
-	const byId = new Map(sessions.filter((each) => each.id !== null).map((each) => [id(each.harness, each.id), each]));
-	type Placed = { pull: Pull; role: Role } | null;
-	const placed = new Map<Session, Placed>();
-	const place = (session: Session, seen: Set<Session>): Placed => {
-		if (placed.has(session)) return placed.get(session)!;
-		const parent = session.parent === null ? undefined : byId.get(id(session.harness, session.parent));
-		// A parent chain that loops back is cut there, so its sessions place by their own branches.
-		const above = parent === undefined || seen.has(parent) ? null : place(parent, new Set([...seen, session]));
-		// A session known to be in another repository keeps out of its parent's PR, as a sub-agent in another checkout.
-		const known = owned(session);
-		const inherited =
-			above && (known === null || (above.pull.repository !== null && known.includes(above.pull.repository)))
-				? above.pull
-				: undefined;
-		const pull = own(session) ?? inherited;
-		let result: Placed = null;
-		if (pull)
-			result = {
-				pull,
-				role:
-					session.id !== null && recorded.classifiers.has(session.id)
-						? "classifying"
-						: session.review || (session.id !== null && recorded.reviewers.has(session.id))
-							? "reviewing"
-							: above && above.pull === pull
-								? above.role
-								: session.start < pull.created
-									? "implementing"
-									: "iterating",
-			};
-		placed.set(session, result);
-		return result;
-	};
-	const attributed: Session[] = [];
-	const unattributed: Session[] = [];
-	for (const session of sessions) {
-		const found = place(session, new Set());
-		if (!found) {
-			unattributed.push(session);
-			continue;
-		}
-		const row = rows.get(found.pull.number);
-		if (!row) continue;
-		attributed.push(session);
-		row.sessions.push({
-			host: session.host,
-			harness: session.harness,
-			session: session.id,
-			parent: session.parent,
-			role: found.role,
-			models: session.models,
-		});
 	}
-	return { attributed, unattributed };
+	return { own, known: owned };
 }
 
+/** What `sessionRecords` builds from. */
+export interface RecordSources {
+	/** The base repository as lowercase `owner/repo`. */
+	repository: string;
+	/** The sessions to attribute, each once. */
+	sessions: Session[];
+	/** Every exported copy, folded ones included, for the repositories each directory belongs to. */
+	evidence: Session[];
+	/** The repository's PRs in the window. */
+	pulls: Pull[];
+	/** The waits logged on this host. */
+	waits: LoggedWait[];
+	/** The sessions to build records for; by default, those on a PR. */
+	emit?: Set<Session>;
+	/** The window's start, epoch ms. */
+	since: number;
+}
+
+/** Each session's record, attributed to the PRs in the window, whose review records name their reviewers and classifier. */
+export function sessionRecords(sources: RecordSources): Map<Session, SessionRecord> {
+	const { repository, sessions, evidence, pulls, waits, emit, since } = sources;
+	// Only the reviewer sessions are read, so no PR author can stop every session's record with a body this version
+	// cannot parse.
+	const reviewers = new Set(pulls.flatMap((pull) => reviewSessions(pull.body)));
+	const classifiers = new Set(pulls.flatMap((pull) => classifierSessions(pull.body)));
+	return buildRecords({
+		repository,
+		sessions,
+		...attribute(sessions, evidence, pulls),
+		reviewers,
+		classifiers,
+		waits,
+		emit,
+		since,
+	});
+}
+
+/** A row of a session with no ID, by its host and transcript files, which no two sessions share. */
+const anonymous = new WeakMap<SessionRow, string>();
+
+/** One session across the PR rows it appears on. */
+const identity = (session: SessionRow) => JSON.stringify([session.harness, session.session ?? anonymous.get(session)]);
+
 function spendRows(pulls: PullRow[]): SpendRow[] {
-	const rows = new Map<string, SpendRow>();
+	const rows = new Map<string, SpendRow & { seen: Set<string> }>();
 	for (const each of pulls)
 		for (const session of each.sessions)
 			for (const spent of session.models) {
@@ -603,19 +602,23 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 						effort: spent.effort,
 						sessions: 0,
 						...zero(),
+						seen: new Set(),
 					};
 					rows.set(id, row);
 				}
-				row.sessions++;
-				add(row, spent);
+				if (!row.seen.has(identity(session))) row.sessions++;
+				row.seen.add(identity(session));
+				add(row, portion(session, spent));
 			}
-	const roles: Role[] = ["implementing", "iterating", "reviewing", "classifying"];
-	return [...rows.values()].sort((a, b) =>
-		order(
-			[a.size, roles.indexOf(a.role), a.harness, a.model, a.effort],
-			[b.size, roles.indexOf(b.role), b.harness, b.model, b.effort],
-		),
-	);
+	const roles: readonly Role[] = ROLES;
+	return [...rows.values()]
+		.map(({ seen: _, ...row }) => row)
+		.sort((a, b) =>
+			order(
+				[a.size, roles.indexOf(a.role), a.harness, a.model, a.effort],
+				[b.size, roles.indexOf(b.role), b.harness, b.model, b.effort],
+			),
+		);
 }
 
 const noCounts = (): Omit<Counts, "first"> => ({
@@ -692,6 +695,11 @@ export function share(
 	}
 	return shares;
 }
+
+/** A session's spend on one PR: on several, as a coordinator is, it counts toward each in equal shares. */
+const portion = (session: SessionRow, spent: Spent): Spent =>
+	session.pulls.length > 1 ? { ...spent, ...part(spent, session.pulls.length) } : spent;
+const shareOf = (session: SessionRow): Spent[] => session.models.map((spent) => portion(session, spent));
 
 /** One `n`th of `tokens`. */
 function part(tokens: Tokens, n: number): Tokens {
@@ -778,7 +786,7 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 		];
 		const writing = each.sessions
 			.filter((session) => session.role === "implementing" || session.role === "iterating")
-			.flatMap((session) => session.models.map((spent) => ({ ...spent, role: session.role })));
+			.flatMap((session) => shareOf(session).map((spent) => ({ ...spent, role: session.role })));
 		const shares =
 			each.state === "merged" ? share(writing, distinct) : new Map<number, Tokens & { split: number }>();
 		for (const [i, implementer] of distinct.entries()) {
@@ -845,7 +853,7 @@ function reviewerRows(pulls: PullRow[]): ReviewerRow[] {
 		};
 		const reviewing = each.sessions
 			.filter((session) => session.role === "reviewing")
-			.flatMap((session) => session.models.map((spent) => ({ ...spent, seat: named(session) })));
+			.flatMap((session) => shareOf(session).map((spent) => ({ ...spent, seat: named(session) })));
 		for (const [i, spent] of share(reviewing, each.review)) {
 			const to = row(each, each.review[i]!).spent;
 			to.pulls++;
@@ -874,6 +882,7 @@ function reviewerRows(pulls: PullRow[]): ReviewerRow[] {
  */
 function armRows(pulls: PullRow[]): ArmRow[] {
 	const rows = new Map<string, ArmRow>();
+	const seen = new Map<ArmRow, Set<string>>();
 	const latest = tallied(pulls, (each) => each.implementers.length > 0);
 	for (const each of pulls) {
 		const first = each.implementers[0];
@@ -887,9 +896,13 @@ function armRows(pulls: PullRow[]): ArmRow[] {
 			rows.set(id, row);
 		}
 		outcome(row, each, latest);
+		const counted = seen.get(row) ?? new Set<string>();
+		seen.set(row, counted);
 		for (const session of each.sessions) {
-			row.sessions++;
-			for (const spent of session.models) add(row.spend, spent);
+			// A session on several PRs of the arm, as a coordinator is, counts once, its shares adding up to its cost.
+			if (!counted.has(identity(session))) row.sessions++;
+			counted.add(identity(session));
+			for (const spent of shareOf(session)) add(row.spend, spent);
 		}
 	}
 	return [...rows.values()].sort((a, b) =>
@@ -986,12 +999,27 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 	let folded: Session[] = dropped;
 	if (exported !== null) {
 		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
-		const reviewers = new Set(allRows.flatMap((row) => row.review.flatMap((review) => review.session ?? [])));
-		const classifiers = new Set(allRows.flatMap((row) => row.risk?.session ?? []));
-		const { attributed, unattributed: left } = attribute(kept, exported ?? [], all, byNumber, {
-			reviewers,
-			classifiers,
+		const records = sessionRecords({
+			repository: key(repository),
+			sessions: kept,
+			evidence: exported,
+			pulls: all,
+			waits: deps.waits(since),
+			since,
 		});
+		const attributed: Session[] = [];
+		const left: Session[] = [];
+		for (const session of kept) {
+			const record = records.get(session);
+			const on = record?.pulls.flatMap((number) => byNumber.get(number) ?? []) ?? [];
+			for (const row of on) {
+				const each = { ...record!, host: session.host };
+				if (each.session === null) anonymous.set(each, JSON.stringify([session.host, session.files]));
+				row.sessions.push(each);
+			}
+			if (on.length) attributed.push(session);
+			else if (!record?.pulls.length) left.push(session);
+		}
 		const reported = narrowed ? attributed : [...attributed, ...left];
 		if (!narrowed) {
 			unattributed = { sessions: left.length, ...zero() };
@@ -1050,6 +1078,31 @@ const percent = (part: number, whole: number) => (whole ? `${Math.round((100 * p
 const answers = (r: Omit<OnlineReview, "reviewer" | "finalHead">) =>
 	`${r.findings} finding${r.findings === 1 ? "" : "s"}: ${r.accepted} accepted, ${r.declined} declined, ${r.unclassified} unclassified, ${r.unanswered} unanswered`;
 
+/** Seconds under a minute, hours past two, else minutes. */
+const duration = (ms: number) =>
+	ms < 60_000
+		? `${Math.round(ms / 1000)}s`
+		: ms >= 7_200_000
+			? `${(ms / 3_600_000).toFixed(1)}h`
+			: `${Math.round(ms / 60_000)}m`;
+
+/**
+ * The time a PR's sessions spent in each kind of wait, a shared session's in its share, and how many sessions'
+ * waits are unknown, as for those read on another host; empty when there is nothing to say.
+ */
+function waitTotals(sessions: SessionRow[]): string {
+	const totals = new Map<string, number>();
+	let unknown = 0;
+	for (const s of sessions) {
+		if (s.waits === null) unknown++;
+		for (const w of s.waits ?? [])
+			totals.set(w.kind, (totals.get(w.kind) ?? 0) + (Date.parse(w.end) - Date.parse(w.start)) / s.pulls.length);
+	}
+	const parts = WAIT_KINDS.filter((kind) => totals.has(kind)).map((kind) => `${kind} ${duration(totals.get(kind)!)}`);
+	if (unknown) parts.push(`unknown for ${unknown} session${unknown === 1 ? "" : "s"} on other hosts`);
+	return parts.join(", ");
+}
+
 /** Rows of cells, each column padded to its widest cell. */
 function table(rows: string[][]): string[] {
 	const widths = rows.reduce<number[]>((w, row) => row.map((cell, i) => Math.max(w[i] ?? 0, cell.length)), []);
@@ -1097,10 +1150,12 @@ export function usageLines(report: Usage): string[] {
 				s.harness,
 				m.model ?? "-",
 				m.effort ?? "-",
-				tokens(m),
+				`${tokens(m)}${s.pulls.length > 1 ? `, 1/${s.pulls.length} here` : ""}`,
 			]),
 		);
 		if (sessions.length) lines.push("  sessions:", ...table(sessions));
+		const waited = waitTotals(row.sessions);
+		if (waited) lines.push(`  waits: ${waited}`);
 	}
 	if (report.spend.length)
 		lines.push(
@@ -1217,5 +1272,5 @@ export function usageLines(report: Usage): string[] {
 
 /** The dependencies `quest usage` runs with. */
 export function usageDependencies(github: ClaimDependencies): UsageDependencies {
-	return { ...github, sessions: runTokenMax };
+	return { ...github, sessions: runTokenMax, waits: (since) => readWaits(since) };
 }

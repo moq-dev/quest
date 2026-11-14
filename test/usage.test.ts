@@ -7,8 +7,9 @@ import { describe, expect, test } from "vitest";
 import { implementer } from "../src/cli/models-record";
 import { fixes } from "../src/cli/land-fixer";
 import type { Risk, Round, Tally } from "../src/cli/review";
-import { parseReview, reviewRecord } from "../src/cli/review-record";
+import { classifierSessions, parseReview, reviewRecord, reviewSessions } from "../src/cli/review-record";
 import { type Session, causes, fold, parseSessions, share, usage, usageLines } from "../src/cli/usage";
+import type { LoggedWait } from "../src/cli/waits";
 import { tempDir } from "./fixture";
 
 const THREAD = "01a1b8e8-8fca-7793-99d1-062f41f8a7b0";
@@ -60,7 +61,7 @@ const exported = (session: string, model: string, effort: string, cost: number, 
 	costUsd: cost,
 	complete: true,
 	skippedLines: 0,
-	files: ["/home/me/.claude/projects/-work/x.jsonl"],
+	files: [],
 	...extra,
 });
 
@@ -90,6 +91,7 @@ describe("parseSessions", () => {
 				},
 			],
 			start: Date.parse("2026-11-06T10:05:00Z"),
+			end: Date.parse("2026-11-06T10:06:00Z"),
 			models: [
 				{
 					model: "gpt-6.1-sol",
@@ -105,6 +107,7 @@ describe("parseSessions", () => {
 			cost: 0.5,
 			complete: true,
 			skippedLines: 0,
+			files: [],
 		});
 		// A session token-max could not resolve a repository, model, or ID for keeps the gap as null.
 		const [unknown] = parse({
@@ -332,6 +335,23 @@ describe("PR records", () => {
 		const settledAll = [tally("codex", 3, { high: 1, medium: 1, low: 2 }, 3, 1), tallies[1]!];
 		expect(reviewRecord({ rounds: clean, tallies: settledAll, risk })).toContain(`- Head: ${"b".repeat(40)}\n`);
 		expect(fixes(body)).toEqual(["codex, gpt-6.1-sol, medium effort"]);
+		// The reviewer sessions read even from a record whose other lines this version cannot parse.
+		const newer = body.replace(/^- Rounds: 3;/m, "- Rounds: 3; first round 1 (medium 1);");
+		expect(() => parseReview(newer)).toThrow("Rounds line is malformed");
+		expect(reviewSessions(newer)).toEqual([THREAD, "thread-2", CLAUDE]);
+		expect(classifierSessions(body)).toEqual([]);
+		const classified = reviewRecord({
+			rounds: [round],
+			tallies,
+			risk: {
+				...risk,
+				classified: {
+					...risk.classified,
+					by: { kind: "model", harness: "codex", model: "gpt-6.1-sol", effort: "low", session: "k1" },
+				},
+			},
+		});
+		expect(classifierSessions(`## Review\n\n${classified}\n`)).toEqual(["k1"]);
 	});
 
 	test("a record written before tallies has none, and a Rounds line that does not add up fails", () => {
@@ -736,7 +756,7 @@ describe("usage", () => {
 			return new Response("not found", { status: 404 });
 		};
 		const calls: [Date, string[]][] = [];
-		const deps = (exported: Session[] | null) => ({
+		const deps = (exported: Session[] | null, waits: LoggedWait[] = []) => ({
 			github: () => ({
 				fetch: fetch as typeof globalThis.fetch,
 				now: Date.now,
@@ -749,9 +769,23 @@ describe("usage", () => {
 				calls.push([since, ssh]);
 				return exported;
 			},
+			waits: () => waits,
 		});
 		return { root, deps, sessions, calls, requests };
 	}
+
+	test("counts each session with no ID apart in the spend rollup", async () => {
+		const { root, deps, sessions } = setup();
+		const known = sessions.find((s) => s.id === CLAUDE)!;
+		// Same host and span, told apart by their transcripts.
+		const anonymous = [1, 2].map((n) => ({ ...known, id: null, files: [`/t/${n}.jsonl`] }));
+		const report = await usage(root, { since: "2026-11-05" }, deps([...sessions, ...anonymous]));
+		const spent = known.models[0]!;
+		const row = report.spend.find(
+			(s) => s.role === "implementing" && s.model === spent.model && s.effort === (spent.effort ?? "unknown"),
+		)!;
+		expect([row.sessions, row.cost]).toEqual([3, 3 * known.cost]);
+	});
 
 	test("ties each session to its PR and role, and rolls up spend and accuracy", async () => {
 		const { root, deps, sessions, calls } = setup();
@@ -1002,6 +1036,20 @@ describe("usage", () => {
 					branches: [{ name: "quest/m0/b1", first: "2026-11-06T10:05:00Z", last: "2026-11-06T10:06:00Z" }],
 					cwd: "/b1",
 				}),
+				// A coordinator whose sub-agents worked on both arm-B PRs counts once there, at its whole cost.
+				exported("44444444-4444-4444-4444-444444444444", "claude-opus-5-5", "high", 4, {
+					branches: [],
+					cwd: "/c",
+				}),
+				...["b1", "b2"].map((branch, i) =>
+					exported(`5555555${i}-5555-5555-5555-555555555555`, "claude-opus-5-5", "high", 1, {
+						parent: "44444444-4444-4444-4444-444444444444",
+						branches: [
+							{ name: `quest/m0/${branch}`, first: "2026-11-06T10:05:00Z", last: "2026-11-06T10:06:00Z" },
+						],
+						cwd: `/${branch}`,
+					}),
+				),
 			],
 		});
 		const report = await usage(root, { since: "2026-11-05" }, deps(sessions));
@@ -1019,7 +1067,7 @@ describe("usage", () => {
 			]),
 		).toEqual([
 			["M", "A", "claude-opus-5-5", "medium", 1, 1, 2, 0, 0],
-			["M", "B", "claude-opus-5-5", "high", 2, 2, 4, 1, 3],
+			["M", "B", "claude-opus-5-5", "high", 2, 2, 4, 4, 9],
 		]);
 		const twenty = report.pulls.find((p) => p.number === 20)!;
 		expect(twenty.implementers.map((i) => i.arm)).toEqual(["B", "B"]);
@@ -1027,7 +1075,7 @@ describe("usage", () => {
 		expect(text).toContain("  implementer: Claude Code, claude-opus-5-5, high effort (XS, arm B)\n");
 		expect(text).toContain("Writer A/B by size and arm:\n");
 		expect(text).toContain(
-			"   M  B  Claude Code  claude-opus-5-5  high    2 PRs, 2 merged, 0 handed back, 2 reviewed: rounds 2.0, findings 2 (medium 2): fixed 2, refuted 0, open 0, first rounds 0: 0; 0 later fixes; 1 sessions, in 10, cache 20 written 30 read, out 40, ~$3.00\n",
+			"   M  B  Claude Code  claude-opus-5-5  high    2 PRs, 2 merged, 0 handed back, 2 reviewed: rounds 2.0, findings 2 (medium 2): fixed 2, refuted 0, open 0, first rounds 0: 0; 0 later fixes; 4 sessions, in 40, cache 80 written 120 read, out 160, ~$9.00\n",
 		);
 	});
 

@@ -14,7 +14,7 @@ import { githubRepository } from "./github";
  * marked incomplete when no newline ends it, as while its session is still writing it. Reading stops once `visit`
  * returns false.
  */
-function eachLine(path: string, visit: (line: string, complete: boolean) => boolean | void): void {
+export function eachLine(path: string, visit: (line: string, complete: boolean) => boolean | void): void {
 	const fd = openSync(path, "r");
 	try {
 		const chunk = Buffer.alloc(1 << 22);
@@ -38,7 +38,12 @@ function eachLine(path: string, visit: (line: string, complete: boolean) => bool
  * One JSON record of a log line, or null for an incomplete last line. With `skip`, a complete line that is not JSON,
  * such as a partial record a crashed write left mid-file, is counted through it and read as null instead of failing.
  */
-function parseLine(path: string, line: string, complete: boolean, skip?: () => void): Record<string, unknown> | null {
+export function parseLine(
+	path: string,
+	line: string,
+	complete: boolean,
+	skip?: () => void,
+): Record<string, unknown> | null {
 	try {
 		return JSON.parse(line) as Record<string, unknown>;
 	} catch (error) {
@@ -200,7 +205,7 @@ function answer(
 const CLAUDE_SKILL = /^\s*Base directory for this skill: (?:.*\/)?([^/\n]+?)\/?[ \t]*$/m;
 
 /** The skill a Claude Code record loads, if any; built-in commands such as `/compact` load none. */
-function claudeSkill(record: Record<string, unknown>): string | null {
+export function claudeSkill(record: Record<string, unknown>): string | null {
 	const content = (record.message as { content?: unknown } | undefined)?.content;
 	if (record.type !== "user" || record.isMeta !== true || !Array.isArray(content)) return null;
 	for (const block of content) {
@@ -286,10 +291,10 @@ export function readClaudeMessages(
 }
 
 /** Codex's tools that block on a person's answer: the first returns it, the second has it sent as a later turn. */
-const CODEX_ASK = new Set(["request_user_input", "request_user_input_async"]);
+export const CODEX_ASK = new Set(["request_user_input", "request_user_input_async"]);
 
 /** The turn part carrying answers to `request_user_input_async`, as Codex's client sends them. */
-const CODEX_REPLY = /^\s*<send_user_message_question_reply>([\s\S]*)<\/send_user_message_question_reply>\s*$/;
+export const CODEX_REPLY = /^\s*<send_user_message_question_reply>([\s\S]*)<\/send_user_message_question_reply>\s*$/;
 
 /** One question Codex asked: its ID for `request_user_input`'s answers, and its options. */
 interface CodexQuestion {
@@ -478,7 +483,7 @@ export function readCodexMessages(path: string, since: number, repository: (dir:
 }
 
 /** The skill a Codex `skills` turn part loads. */
-function codexSkill(text: string): string | null {
+export function codexSkill(text: string): string | null {
 	return /<name>\s*([^<]+?)\s*<\/name>/.exec(text)?.[1] ?? null;
 }
 
