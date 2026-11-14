@@ -481,9 +481,14 @@ interface Backoff {
 
 const backoffPath = (env: NodeJS.ProcessEnv, id: string) => join(stateDirectory(env), "backoff", digest(id));
 
+/** A group's backoff, or null without one; an unreadable file reads as none, so it can never block every group. */
 function readBackoff(env: NodeJS.ProcessEnv, id: string): Backoff | null {
-	const path = backoffPath(env, id);
-	return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Backoff) : null;
+	try {
+		const value = JSON.parse(readFileSync(backoffPath(env, id), "utf8")) as Partial<Backoff> | null;
+		return Number.isSafeInteger(value?.failures) && Number.isFinite(value?.next) ? (value as Backoff) : null;
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -495,7 +500,10 @@ function backOff(deps: SendDependencies, id: string): number {
 	const failures = (readBackoff(deps.env, id)?.failures ?? 0) + 1;
 	const wait = Math.min(deps.interval * 2 ** Math.min(failures - 1, 30), MAX_BACKOFF);
 	mkdirSync(join(stateDirectory(deps.env), "backoff"), { recursive: true, mode: 0o700 });
-	writeFileSync(backoffPath(deps.env, id), JSON.stringify({ failures, next: deps.now() + wait } satisfies Backoff));
+	// Written whole, then renamed, as queue files are, so a crash mid-write leaves the old file or none.
+	const path = backoffPath(deps.env, id);
+	writeFileSync(`${path}.new`, JSON.stringify({ failures, next: deps.now() + wait } satisfies Backoff));
+	renameSync(`${path}.new`, path);
 	return wait;
 }
 

@@ -258,6 +258,21 @@ test("a failing group backs off, doubling, without widening the others' window",
 	expect(pending(env)).toHaveLength(1);
 });
 
+test("an unreadable backoff file reads as none, so it blocks no group", async () => {
+	const env = home();
+	queue(stopped(checkout(ENDPOINT)), env);
+	const failing = sender(env, 500, [session("s1", "quest/m0/a")]);
+	await expect(sendPass(failing.deps)).rejects.toThrow("tried again in 1 minutes");
+	const dir = join(env.XDG_STATE_HOME!, "quest", "records", "backoff");
+	const [name] = readdirSync(dir);
+	expect(readdirSync(dir)).toEqual([name]);
+	// As a crash mid-write would leave it, were it written in place.
+	writeFileSync(join(dir, name!), '{"failures":');
+	const sent = sender(env, 200, [session("s1", "quest/m0/a")]);
+	expect(await sendPass(sent.deps)).toHaveLength(1);
+	expect(readdirSync(dir)).toEqual([]);
+});
+
 test("an upload this version's own parseUpload refuses fails on the host, never posted", async () => {
 	const env = home();
 	queue(stopped(checkout(ENDPOINT)), env);
