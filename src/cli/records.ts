@@ -33,8 +33,9 @@ export interface RecordInput {
 	sessions: Session[];
 	/** The PR each session's own branch heads, from `attribute`. */
 	own: Map<Session, Pull>;
-	/** Session IDs a PR's review record names. */
+	/** Session IDs a PR's review record names as reviewers, and as its risk classifier. */
 	reviewers: Set<string>;
+	classifiers: Set<string>;
 	/** The waits logged on this host, which only its own sessions (host null) are given. */
 	waits: LoggedWait[];
 	/** The sessions to build records for; by default, those on a PR. Every session still counts for lineage. */
@@ -48,7 +49,8 @@ const iso = (ms: number) => new Date(ms).toISOString();
 
 /**
  * A record for each session that `emit` names, or that worked on a PR. A session's PRs are its own, else its parent's, else, for one that spawned
- * sub-agents, every PR they worked on. Its role is reviewing when Codex marks it a review or a PR's review record
+ * sub-agents, every PR they worked on. Its role is classifying when a PR's review record names it as the risk
+ * classifier, reviewing when Codex marks it a review or a PR's review record
  * names it, else the one its first quest skill gives, else its parent's unless that is coordinating, else coordinating for a
  * session whose PRs are only its sub-agents', planning on a planning skill's branch, and implementing or iterating
  * by whether it started before its PR opened. Transcripts and waits are read only for this host's sessions.
@@ -93,6 +95,7 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 	};
 
 	const roleOf = (s: Session, depth = 0): Role => {
+		if (s.id !== null && input.classifiers.has(s.id)) return "classifying";
 		if (s.review || (s.id !== null && input.reviewers.has(s.id))) return "reviewing";
 		const skill = factsOf(s)?.skill;
 		const fromSkill = skill ? SKILL_ROLES[skill] : undefined;

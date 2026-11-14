@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { type Output, main } from "../src/cli/main";
 import { REVIEWERS } from "../src/cli/models";
-import { SIZES } from "../src/core";
+import { SIZES, recordedRisk } from "../src/core";
 import {
 	type Finding,
 	type Round,
@@ -42,7 +42,9 @@ const CLAUDE_LOGGED_OUT =
 
 /**
  * The findings turn's reply, `reply`: FAKE_REPLY, or one finding. A JSON reply without `earlier` settles
- * each earlier finding the prompt numbers as FAKE_DISPOSITION says, `fixed` by default.
+ * each earlier finding the prompt numbers as FAKE_DISPOSITION says, `fixed` by default, and one without `risk`
+ * reports FAKE_RAISE's tier, else the tier the prompt says the change was classified. FAKE_RAISE as
+ * `<tier>@<effort>` raises only in turns at that effort.
  */
 const REPLY = `
 const listed = /<earlier-findings>\\n([\\s\\S]*?)\\n<\\/earlier-findings>/.exec(stdin)?.[1] ?? "";
@@ -51,11 +53,38 @@ const earlier = [...listed.matchAll(/^(\\d+)\\. /gm)].map((m) => ({
 	disposition: process.env.FAKE_DISPOSITION ?? "fixed",
 	reason: "Checked against the head.",
 }));
+const classified = /was classified (low|medium|high) risk/.exec(stdin)?.[1] ?? "medium";
+const [raise, raiseAt] = (process.env.FAKE_RAISE ?? "").split("@");
+const effort = argv.includes("--effort")
+	? argv[argv.indexOf("--effort") + 1]
+	: JSON.parse((argv.find((arg) => arg.startsWith("model_reasoning_effort=")) ?? "=null").split("=")[1]);
+const risk = raise && (!raiseAt || raiseAt === effort)
+	? { tier: raise, reason: "It rewrites the wire format peers read." }
+	: { tier: classified, reason: "As classified." };
 let reply = process.env.FAKE_REPLY ?? JSON.stringify({ score: 8, rationale: "Lands once the off-by-one is fixed.", findings: [${JSON.stringify(FINDING)}] });
 try {
 	const parsed = JSON.parse(reply);
 	if (parsed && typeof parsed === "object" && !("earlier" in parsed)) reply = JSON.stringify({ ...parsed, earlier });
+	if (parsed && typeof parsed === "object" && !("risk" in parsed)) reply = JSON.stringify({ ...JSON.parse(reply), risk });
 } catch {}
+`;
+
+/** The classifier's reply: FAKE_RISK, or medium. */
+const RISK_REPLY = `JSON.stringify(process.env.FAKE_RISK ? JSON.parse(process.env.FAKE_RISK) : { tier: "medium", reason: "It changes what the library returns." })`;
+
+/**
+ * Records one call as its own file in FAKE_LOG, a directory, renamed into place
+ * once whole, named by its microsecond start so the files sort in call order. A
+ * fake the review aborts can die mid-write, and a partial line in one shared
+ * log would break the reader.
+ */
+const LOG = `
+const logged = (call) => {
+	const name = Math.round((performance.timeOrigin + performance.now()) * 1000).toString() + "-" + process.pid;
+	const file = require("node:path").join(process.env.FAKE_LOG, name);
+	fs.writeFileSync(file + ".tmp", JSON.stringify(call));
+	fs.renameSync(file + ".tmp", file + ".json");
+};
 `;
 
 /**
@@ -67,16 +96,17 @@ try {
  * CODEX_ACCESS_TOKEN but not CODEX_API_KEY. FAKE_REJECTED has the API
  * reject the login in each turn with the real CLI's error, in the style it
  * names. FAKE_LIMITED fails a turn on the account's usage limit with the real
- * CLI's error, naming its reset unless set to `unknown`. FAKE_REPLY replaces
- * the findings reply.
+ * CLI's error, naming its reset unless set to `unknown`. FAKE_CLASSIFY fails
+ * the classifier's turn of each `<harness>-rejected` or `<harness>-limited` it
+ * lists, the same way. FAKE_REPLY replaces the findings reply.
  */
 const FAKES: Record<string, string> = {
 	claude: `
-const fs = require("node:fs");
+const fs = require("node:fs");${LOG}
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|ANTHROPIC|FAKE_HOST|PATH$)/.test(k)));
-fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
+logged({ argv, stdin, env, cwd: process.cwd() });
 const credential = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"].some((k) => process.env[k]);
 const provider = Object.entries(process.env).some(([k, v]) => k.startsWith("CLAUDE_CODE_USE_") && v === "1");
 const loggedIn = !process.env.FAKE_LOGGED_OUT || credential || provider;
@@ -104,7 +134,25 @@ if (process.env.FAKE_LIMITED && argv.includes("--resume")) {
 	process.exit(1);
 }
 const usage = { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
-if (argv.includes("--session-id")) {
+const failing = (process.env.FAKE_CLASSIFY ?? "").split(",");
+if (argv.includes("--session-id") && argv.includes("--json-schema")) {
+	if (failing.includes("claude-rejected")) {
+		result({ session_id: at("--session-id"), is_error: true, api_error_status: 401, result: "Failed to authenticate. API Error: 401 Invalid bearer token" });
+		process.exit(1);
+	}
+	if (failing.includes("claude-limited")) {
+		console.log(JSON.stringify({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1900000000 } }));
+		result({ session_id: at("--session-id"), is_error: true, result: "You've hit your weekly limit · resets Nov 5, 3pm (UTC)" });
+		process.exit(1);
+	}
+	const reply = ${RISK_REPLY};
+	result({
+		session_id: at("--session-id"),
+		result: reply,
+		structured_output: JSON.parse(reply),
+		usage: { ...usage, input_tokens: 40, output_tokens: 3 },
+	});
+} else if (argv.includes("--session-id")) {
 	result({
 		session_id: at("--session-id"),
 		result: "Found an off-by-one.",
@@ -126,11 +174,11 @@ if (argv.includes("--session-id")) {
 }
 `,
 	codex: `
-const fs = require("node:fs");
+const fs = require("node:fs");${LOG}
 const argv = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(CLAUDE|CODEX|ANTHROPIC|FAKE_HOST|PATH$)/.test(k)));
-fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv, stdin, env, cwd: process.cwd() }) + "\\n");
+logged({ argv, stdin, env, cwd: process.cwd() });
 if (argv[0] === "login") process.exit(process.env.FAKE_LOGGED_OUT && !process.env.CODEX_ACCESS_TOKEN ? 1 : 0);
 if (process.env.FAKE_HANG) {
 	// It takes a while to exit when asked to, as a CLI saving its session does.
@@ -170,6 +218,20 @@ if (argv[1] === "review") {
 	event({ type: "thread.started", thread_id: "thread-1" });
 	message("Found an off-by-one.");
 	event({ type: "turn.completed", usage: zero });
+} else if (argv[1] !== "resume") {
+	event({ type: "thread.started", thread_id: "thread-classify" });
+	const failing = (process.env.FAKE_CLASSIFY ?? "").split(",");
+	if (failing.includes("codex-rejected")) {
+		event({ type: "turn.failed", error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header" } });
+		process.exit(1);
+	}
+	if (failing.includes("codex-limited")) {
+		const message = "You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 5th, 2026 3:15 PM.";
+		event({ type: "turn.failed", error: { message } });
+		process.exit(1);
+	}
+	message(${RISK_REPLY});
+	event({ type: "turn.completed", usage: { input_tokens: 40, cached_input_tokens: 0, output_tokens: 3 } });
 } else {
 	event({ type: "thread.started", thread_id: argv[argv.length - 2] });
 	message("Checking the findings.");
@@ -253,7 +315,8 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 	write(repo, "src/lib.ts", "export const x = 2;\n");
 	git(repo, "commit", "-qam", "change");
 
-	const log = join(dir, "calls.log");
+	const log = join(dir, "calls");
+	mkdirSync(log);
 	vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
 	vi.stubEnv("FAKE_LOG", log);
 	// The session's own profile would change the logged-out errors.
@@ -272,18 +335,19 @@ function setup(host: "CLAUDECODE" | "CODEX_THREAD_ID" | null = "CLAUDECODE"): Se
 		"FAKE_LIMITED",
 		"FAKE_HANG",
 		"FAKE_DISPOSITION",
+		"FAKE_RISK",
+		"FAKE_RAISE",
 	]) {
 		vi.stubEnv(name, undefined);
 	}
 	if (host === "CLAUDECODE") vi.stubEnv("CLAUDECODE", "1");
 	if (host === "CODEX_THREAD_ID") vi.stubEnv("CODEX_THREAD_ID", "parent");
+	// Only whole calls: a fake's unfinished write stays a .tmp file.
 	const read = (path: string) =>
-		existsSync(path)
-			? readFileSync(path, "utf8")
-					.trim()
-					.split("\n")
-					.map((line) => JSON.parse(line))
-			: [];
+		readdirSync(path)
+			.filter((name) => name.endsWith(".json"))
+			.sort()
+			.map((name) => JSON.parse(readFileSync(join(path, name), "utf8")));
 	return { repo, bin, calls: () => read(log) };
 }
 
@@ -942,6 +1006,9 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 			"size M default",
 			`base ${base} origin/main`,
 			`head ${head}`,
+			// The fixture's base has no RISK.md, so no model classifies the change.
+			"risk medium the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"classified medium default the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
 			"",
 			"reviewer codex gpt-6.1-sol high",
 			"session thread-1",
@@ -1003,10 +1070,15 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	expect(second.stdin).not.toContain("BASE-REVIEW rule");
 	expect(second.stdin).toContain("Read no files and run no commands");
 	expect(second.stdin).toContain(head);
+	// The report turn gives the classified tier, which the reviewer may raise and never lower.
+	expect(second.stdin).toContain("<classified-reason>\nthe base has no RISK.md");
+	expect(second.stdin).toContain("Never report a lower tier.");
+	expect(first.stdin).not.toContain("classified");
 	const schema = second.argv[second.argv.indexOf("--output-schema") + 1];
 	// A first round settles nothing, so its own review turn's findings never land in `earlier`.
 	const replySchema = JSON.parse(readFileSync(schema, "utf8"));
-	expect(replySchema.required).toEqual(["score", "rationale", "findings"]);
+	expect(replySchema.required).toEqual(["score", "rationale", "risk", "findings"]);
+	expect(replySchema.properties.risk.properties.tier.enum).toEqual(["low", "medium", "high"]);
 	expect(replySchema.properties.earlier).toBeUndefined();
 });
 
@@ -1119,7 +1191,9 @@ fakes("a later round resumes the session with the new head and the author's resp
 	expect(resumed.argv.slice(0, 2)).toEqual(["exec", "resume"]);
 	expect(resumed.argv.at(-2)).toBe("thread-1");
 	const bounded = JSON.parse(readFileSync(resumed.argv[resumed.argv.indexOf("--output-schema") + 1], "utf8"));
-	expect(bounded.required).toEqual(["score", "rationale", "findings", "earlier"]);
+	expect(bounded.required).toEqual(["score", "rationale", "risk", "findings", "earlier"]);
+	// The new head is classified again before the round, which gives it to the reviewer.
+	expect(resumed.stdin).toContain("the change was classified medium risk");
 	expect(resumed.stdin).toContain("Fixed at src/lib.ts:1.");
 	expect(resumed.stdin).toContain("<earlier-findings>\n1. high src/lib.ts:2 Off by one\n</earlier-findings>");
 	// The session was given the rules already, and they have not changed.
@@ -1310,6 +1384,8 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 				// The land gate counts a full SHA, which a head with an open finding does not earn.
 				`- Head: ${head.slice(0, 12)}, named in full once no reviewer reports a finding`,
 				`- Base: origin/main at ${base.slice(0, 12)}`,
+				"- Risk: medium, `the base has no RISK.md to name what is always high or customer-facing, so every change is medium`",
+				"- Classified: medium by default",
 				"",
 				// The body's `## Models` record sizes the PR S.
 				"- Reviewer: Codex, gpt-6.1-sol, medium effort",
@@ -1369,6 +1445,264 @@ fakes("each round rewrites the Review section of the branch's open PR, keeping t
 	} finally {
 		vi.unstubAllGlobals();
 	}
+});
+
+/** A risk file whose `## High` list holds `high`, after a line of prose the classifier reads. */
+const riskFile = (high: string[]) =>
+	[
+		"# Risk",
+		"",
+		"CUSTOMER-PROSE: the averaging library ships to paying customers.",
+		"",
+		"## High",
+		"",
+		...high,
+		"",
+	].join("\n");
+
+/** The turns that ran the classifier, Haiku, rather than a reviewer. */
+const classifying = (calls: Call[]) => calls.filter((call) => call.argv.includes("claude-haiku-5-5"));
+
+fakes(
+	"a change to a path held high is high without a model, even a file moved out of it",
+	async () => {
+		const s = setup();
+		moveBase(s.repo, (dir) => write(dir, "RISK.md", riskFile(["- `src/` - customers' averages run on it"])));
+		const listed = await quest("--root", s.repo, "review");
+		expect(listed.code, listed.stderr).toBe(0);
+		const reason = "it changes src/lib.ts, which is always high: customers' averages run on it";
+		expect(listed.stdout).toContain(`\nrisk high ${reason}\nclassified high paths ${reason}\n\nreviewer codex`);
+		expect(classifying(s.calls())).toEqual([]);
+
+		// Workflows are high in every repository, whatever its risk file lists, and a rename out of them counts.
+		const t = setup();
+		const base = moveBase(t.repo, (dir) => {
+			write(dir, "RISK.md", riskFile([]));
+			write(dir, ".github/workflows/ci.yml", "on: push\n");
+		});
+		git(t.repo, "fetch", "-q", "origin");
+		git(t.repo, "merge", "-q", "--no-edit", "origin/main");
+		git(t.repo, "mv", ".github/workflows/ci.yml", "ci.yml");
+		git(t.repo, "commit", "-qm", "retire the workflow");
+		const moved = await quest("--root", t.repo, "review");
+		expect(moved.code, moved.stderr).toBe(0);
+		expect(moved.stdout).toContain(`base ${base} origin/main\n`);
+		expect(moved.stdout).toContain(
+			"\nrisk high it changes .github/workflows/ci.yml, which is always high: workflows run with the repository's secrets and decide what merges and ships\n",
+		);
+	},
+	20_000,
+);
+
+fakes(
+	"the classifier sets the tier from the diff and the base's risk file, once per head",
+	async () => {
+		const s = setup();
+		moveBase(s.repo, (dir) => write(dir, "RISK.md", riskFile(["- `billing/**/*.ts` - charges customers"])));
+		vi.stubEnv("FAKE_RISK", JSON.stringify({ tier: "low", reason: "Only a constant\nchanges." }));
+		vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+		const first = await quest("--root", s.repo, "review");
+		expect(first.code, first.stderr).toBe(0);
+		const [call, ...more] = classifying(s.calls());
+		expect(more).toEqual([]);
+		const session = call!.argv[call!.argv.indexOf("--session-id") + 1];
+		expect(first.stdout).toContain(
+			[
+				"risk low Only a constant changes.",
+				"classified low model Only a constant changes.",
+				`classifier claude claude-haiku-5-5 low ${session}`,
+				"usage classify input 40 cached 0 output 3",
+				"",
+			].join("\n"),
+		);
+		// One read-only turn with its own instructions, never the repository's, that replies in the schema.
+		expect(call!.argv[call!.argv.indexOf("--effort") + 1]).toBe("low");
+		expect(call!.argv).toContain("dontAsk");
+		const schema = JSON.parse(call!.argv[call!.argv.indexOf("--json-schema") + 1]!);
+		expect(schema.required).toEqual(["tier", "reason"]);
+		const instructions = call!.argv[call!.argv.indexOf("--append-system-prompt") + 1]!;
+		expect(instructions).toContain("You set a pull request's risk tier from its change alone");
+		expect(instructions).not.toContain("BASE-ROOT rule");
+		// The prompt holds the base's risk file and the whole diff, by its merge base.
+		expect(call!.stdin).toContain("CUSTOMER-PROSE");
+		expect(call!.stdin).toContain("-export const x = 1;\n+export const x = 2;");
+		expect(call!.stdin).toContain(
+			`\`git diff --stat --patch ${git(s.repo, "merge-base", "HEAD", "origin/main")}..`,
+		);
+		// The reviewer is told the tier it may raise.
+		expect(at(s.calls(), "high").at(-1)!.stdin).toContain(
+			"<classified-reason>\nOnly a constant changes.\n</classified-reason>",
+		);
+
+		// The same head and risk file reuse the tier, so no model runs again.
+		const again = await quest("--root", s.repo, "review");
+		expect(again.code, again.stderr).toBe(0);
+		expect(again.stdout).toContain(`classifier claude claude-haiku-5-5 low ${session}\n\nreviewer`);
+		expect(classifying(s.calls())).toHaveLength(1);
+		// --new classifies again.
+		expect((await quest("--root", s.repo, "review", "--new")).code).toBe(0);
+		expect(classifying(s.calls())).toHaveLength(2);
+	},
+	20_000,
+);
+
+fakes("without a logged-in Claude Code, Codex classifies", async () => {
+	const s = setup();
+	moveBase(s.repo, (dir) => write(dir, "RISK.md", riskFile([])));
+	// Only git and the fake Codex are on PATH, so no Claude Code install outside the fakes is found either.
+	const only = join(s.bin, "..", "codex-only");
+	mkdirSync(only);
+	symlinkSync(execFileSync("which", ["git"], { encoding: "utf8" }).trim(), join(only, "git"));
+	symlinkSync(join(s.bin, "codex"), join(only, "codex"));
+	vi.stubEnv("PATH", only);
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code, result.stderr).toBe(0);
+	expect(result.stdout).toContain("classifier codex gpt-6.1-sol low thread-classify\n");
+	const call = s.calls().find((each) => each.argv[1] === "--json")!;
+	expect(call.argv.slice(0, 2)).toEqual(["exec", "--json"]);
+	expect(call.argv).toContain('model_reasoning_effort="low"');
+	expect(call.argv).toContain('sandbox_mode="read-only"');
+	const file = call.argv[call.argv.indexOf("--output-schema") + 1]!;
+	expect(JSON.parse(readFileSync(file, "utf8")).required).toEqual(["tier", "reason"]);
+	// Each schema has a file named by its content, since every worktree of the clone, on any release, writes there.
+	const report = s.calls().find((each) => each.argv[1] === "resume")!;
+	const reportFile = report.argv[report.argv.indexOf("--output-schema") + 1]!;
+	expect(dirname(reportFile)).toBe(dirname(file));
+	expect([basename(file), basename(reportFile)]).toEqual([
+		expect.stringMatching(/^schema-[0-9a-f]{16}\.json$/),
+		expect.stringMatching(/^schema-[0-9a-f]{16}\.json$/),
+	]);
+	expect(reportFile).not.toBe(file);
+	expect(JSON.parse(readFileSync(reportFile, "utf8")).required).toContain("risk");
+});
+
+fakes(
+	"a classifier whose turn fails on its login or usage limit passes the turn to the next",
+	async () => {
+		const s = setup();
+		moveBase(s.repo, (dir) => write(dir, "RISK.md", riskFile([])));
+		vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+		const run = async (failing: string) => {
+			vi.stubEnv("FAKE_CLASSIFY", failing);
+			return quest("--root", s.repo, "review", "--new");
+		};
+		for (const failing of ["claude-rejected", "claude-limited"]) {
+			const passed = await run(failing);
+			expect(passed.code, passed.stderr).toBe(0);
+			expect(passed.stdout).toContain("classifier codex gpt-6.1-sol low thread-classify\n");
+		}
+		// With every classifier out of usage, the run fails on the limit that resets first.
+		expect(await run("claude-limited,codex-limited")).toMatchObject({
+			code: 3,
+			stdout: "",
+			stderr: `error: codex hit its usage limit; resets ${codexReset}\n`,
+		});
+		// Otherwise it names why each failed.
+		const failed = await run("claude-rejected,codex-limited");
+		expect(failed.code).toBe(2);
+		expect(failed.stderr).toMatch(
+			/^error: no classifier could set the risk tier: claude is not logged in .*; codex hit its usage limit; resets /,
+		);
+	},
+	20_000,
+);
+
+fakes("a reviewer raises the tier, and the record keeps the classifier's beside it", async () => {
+	const s = setup();
+	moveBase(s.repo, (dir) => write(dir, "RISK.md", riskFile([])));
+	const pull = { number: 7, body: "Fixes averaging.\n\n## Models\n\n- Size: S\n" };
+	onGitHub(s.repo, [pull]);
+	vi.stubEnv("FAKE_RAISE", "high");
+	try {
+		const result = await quest("--root", s.repo, "review");
+		expect(result.code, result.stderr).toBe(0);
+		expect(result.stdout).toContain("\nrisk high It rewrites the wire format peers read.\n");
+		expect(result.stdout).toContain("\nclassified medium model It changes what the library returns.\n");
+		expect(result.stdout).toContain("\nscore 8 Lands once the off-by-one is fixed.\nraised high It rewrites");
+		const session = classifying(s.calls())[0]!.argv.find((arg) => /^[0-9a-f-]{36}$/.test(arg));
+		expect(pull.body).toContain(
+			[
+				"- Risk: high, `It rewrites the wire format peers read.`",
+				`- Classified: medium by Claude Code, claude-haiku-5-5, low effort, session \`${session}\``,
+				"",
+				"- Reviewer: Codex, gpt-6.1-sol, medium effort",
+				"- Session: `thread-1`, round 1",
+				"- Score: 8/10, `Lands once the off-by-one is fixed.`",
+				"- Raised the risk to high: `It rewrites the wire format peers read.`",
+			].join("\n"),
+		);
+		expect(recordedRisk(pull.body)).toEqual({
+			tier: "high",
+			reason: "It rewrites the wire format peers read.",
+			classified: "medium",
+			by: "model",
+			session,
+			head: git(s.repo, "rev-parse", "HEAD").slice(0, 12),
+		});
+
+		// A reviewer never lowers it.
+		vi.stubEnv("FAKE_RAISE", "low");
+		write(s.repo, ".tmp/responses.md", "1. Fixed.\n2. Fixed.\n");
+		const lower = await quest("--root", s.repo, "review", "--responses", join(s.repo, ".tmp", "responses.md"));
+		expect(lower.code, lower.stderr).toBe(0);
+		expect(lower.stdout).toContain("\nrisk medium It changes what the library returns.\n");
+		expect(lower.stdout).not.toContain("\nraised ");
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+fakes("a raise from a reviewer the run leaves out holds while its last round reviewed the head", async () => {
+	const s = setup();
+	const pull = { number: 7, body: "Fixes averaging.\n\n## Models\n\n- Size: S\n" };
+	onGitHub(s.repo, [pull]);
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+	// Only the shadow, Sol at low effort for an S PR, raises the tier.
+	vi.stubEnv("FAKE_RAISE", "high@low");
+	const raised = "\nrisk high It rewrites the wire format peers read.\n";
+	const block = [
+		"- Reviewer: Codex, gpt-6.1-sol, low effort, shadow",
+		"- Session: `thread-1`",
+		"- Raised the risk to high: `It rewrites the wire format peers read.`",
+		"- Rounds: 1;",
+	].join("\n");
+	try {
+		const first = await quest("--root", s.repo, "review");
+		expect(first.code, first.stderr).toBe(0);
+		expect(first.stdout).toContain(raised);
+		expect(first.stdout).toContain(" low shadow\n");
+
+		// The same head repeats the pick's clean round and leaves out the shadow, whose raise still covers it.
+		vi.stubEnv("FAKE_RAISE", undefined);
+		const again = await quest("--root", s.repo, "review");
+		expect(again.code, again.stderr).toBe(0);
+		expect(again.stdout).not.toContain(" shadow\n");
+		expect(again.stdout).toContain(raised);
+		expect(pull.body).toContain(block);
+		expect(recordedRisk(pull.body)).toMatchObject({ tier: "high", classified: "medium" });
+
+		// A new head is the pick's alone to judge.
+		write(s.repo, "src/lib.ts", "export const x = 3;\n");
+		git(s.repo, "commit", "-qam", "another constant");
+		const moved = await quest("--root", s.repo, "review");
+		expect(moved.code, moved.stderr).toBe(0);
+		expect(moved.stdout).toContain("\nrisk medium the base has no RISK.md");
+		expect(pull.body).not.toContain("- Raised the risk");
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+fakes("a malformed risk file on the base fails before any model runs", async () => {
+	const s = setup();
+	moveBase(s.repo, (dir) => write(dir, "RISK.md", riskFile(["- `/etc/` - absolute", "- src/ without a reason"])));
+	const result = await quest("--root", s.repo, "review");
+	expect(result.code).toBe(2);
+	expect(result.stderr).toContain(
+		"the base's RISK.md cannot be read: RISK.md:7: `/etc/` is no pattern: it starts with /",
+	);
+	expect(result.stderr).toContain("RISK.md:8: a `## High` item is a backticked pattern");
+	expect(s.calls()).toEqual([]);
 });
 
 fakes("a branch with no open PR, or a body without a Review section, is reported as such", async () => {
@@ -1534,11 +1868,11 @@ test("a Models record reads its size and every implementing model", () => {
 		implementers: [
 			{
 				item: "Implementer: Claude Code, claude-opus-5-5, high effort",
-				fields: { harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: null },
+				fields: { harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: null, arm: null },
 			},
 			{
 				item: "Implementer: Codex, unknown, unknown effort",
-				fields: { harness: "Codex", model: "unknown", effort: "unknown", size: null },
+				fields: { harness: "Codex", model: "unknown", effort: "unknown", size: null, arm: null },
 			},
 		],
 	});
@@ -1556,6 +1890,7 @@ test("an Implementer line reads as agents write it", () => {
 		model: "claude-opus-5-5",
 		effort,
 		size: null,
+		arm: null,
 	});
 	expect(read("Claude Code, Opus 5.5, high effort")).toEqual(opus("high"));
 	expect(read("Claude Code, Claude Opus 5.5, xhigh effort")).toEqual(opus("xhigh"));
@@ -1566,21 +1901,31 @@ test("an Implementer line reads as agents write it", () => {
 		model: "claude-haiku-5-5",
 		effort: "low",
 		size: null,
+		arm: null,
 	});
 	expect(read("claude-haiku-5-5, effort not reported")).toEqual({
 		harness: "unknown",
 		model: "claude-haiku-5-5",
 		effort: "unknown",
 		size: null,
+		arm: null,
 	});
 	expect(read("Codex, GPT-6.1 Sol, medium effort (iterate, XS)")).toEqual({
 		harness: "Codex",
 		model: "gpt-6.1-sol",
 		effort: "medium",
 		size: "XS",
+		arm: null,
 	});
 	expect(read("Claude Code, Opus 5.5, low effort (iterate, flow fix)")).toEqual(opus("low"));
-	expect(read("Claude Code, Opus 5.5, high effort (iterate, XS, arm B)")).toEqual({ ...opus("high"), size: "XS" });
+	expect(read("Claude Code, Opus 5.5, high effort (iterate, XS, arm B)")).toEqual({
+		...opus("high"),
+		size: "XS",
+		arm: "B",
+	});
+	expect(read("Claude Code, Opus 5.5, high effort (arm A)")).toEqual({ ...opus("high"), arm: "A" });
+	// Only an arm the A/B runs reads as one.
+	expect(read("Claude Code, Opus 5.5, high effort (arm C)")).toEqual(opus("high"));
 	expect(read("unknown, Opus 5.5, high effort")).toEqual(opus("high", "unknown"));
 	expect(read("Claude Code, Fable 5.2, medium effort")?.model).toBe("claude-fable-5-2");
 	expect(read("Codex, openai/gpt-6.1-sol, high effort")?.model).toBe("gpt-6.1-sol");
@@ -1674,7 +2019,8 @@ fakes("a reply that does not match the schema fails rather than reads as clean",
 });
 
 test("the verdict is checked field by field, settling each earlier finding once", () => {
-	const scored = { score: 7, rationale: "Fix the finding.", earlier: [] };
+	const risk = { tier: "medium", reason: "It changes what the library returns." };
+	const scored = { score: 7, rationale: "Fix the finding.", risk, earlier: [] };
 	expect(verdict({ structured: { ...scored, findings: [{ ...FINDING, line: null }] } }, 0)).toEqual({
 		...scored,
 		findings: [{ ...FINDING, line: null }],
@@ -1687,6 +2033,14 @@ test("the verdict is checked field by field, settling each earlier finding once"
 		expect(() => verdict({ structured: { ...scored, score, findings: [] } }, 0)).toThrow("no score from 0 to 10");
 	}
 	expect(() => verdict({ structured: { ...scored, rationale: " ", findings: [] } }, 0)).toThrow("no rationale");
+	// The reviewer's tier is one of the three, with a reason, which a reply puts on one line.
+	for (const bad of [undefined, { tier: "critical", reason: "x" }, { tier: "high", reason: " " }]) {
+		expect(() => verdict({ structured: { ...scored, risk: bad, findings: [] } }, 0)).toThrow("no risk tier");
+	}
+	expect(
+		verdict({ structured: { ...scored, risk: { tier: "high", reason: "Peers\n read it." }, findings: [] } }, 0)
+			.risk,
+	).toEqual({ tier: "high", reason: "Peers read it." });
 
 	const fixed = { finding: 1, disposition: "fixed", reason: "src/lib.ts:2 divides by the length." };
 	const refuted = { finding: 2, disposition: "refuted", reason: "The maintainer decided it." };

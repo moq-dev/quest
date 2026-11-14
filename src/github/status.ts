@@ -17,7 +17,7 @@ import {
 } from "./client";
 import { appOf, checksState, contextOutcome } from "./checks";
 import { EJECTED, LAND_CHECK, pinned } from "./land";
-import { reviewSection } from "../core";
+import { type Tier, recordedRisk, reviewSection } from "../core";
 import { readHoldStatus, type HoldFact, type HoldReport } from "./hold";
 import { readSignals, type Signal } from "./signals";
 
@@ -147,6 +147,12 @@ export interface Status {
 	checkpoints: { reviewer: string; round: number; url: string }[];
 	/** Null when the `## Review` section names no full SHA. */
 	reviewRecord: ReviewRecord | null;
+	/**
+	 * The head's risk tier as the `## Review` record names it, and the classifier's own tier, lower when a reviewer
+	 * raised it; null when the record names none. `state` is the review record's, which a line after it carries to a
+	 * later head, else `current` when the record names the head and `stale` when not.
+	 */
+	risk: { tier: Tier; reason: string; classified: Tier; state: ReviewRecord["state"] } | null;
 	reactions: Reaction[];
 	/** Unresolved review threads, oldest first. */
 	threads: Thread[];
@@ -220,12 +226,21 @@ export async function pullRequestStatus(pr: PullRequest, deps: GitHubDependencie
 			: { checks: [], workflows: [] };
 	const status = summarize(first!, rollup, current, needs, reviewNodes, threadNodes);
 	status.reviewRecord = await reviewRecord(github, pr, first!, deps.warn);
+	status.risk = risk(typeof first!.body === "string" ? first!.body : "", head, status.reviewRecord);
 	if (status.autoMerge !== null) status.autoMerge.head = await enabledHead(github, first!, deps.warn);
 	const signaled = (await readSignals(github, pr, [pr.number])).get(pr.number)!;
 	if (signaled.head !== first!.headRefOid)
 		throw new Error("the PR head changed while reading its signals; rerun quest status");
 	status.signals = signaled.signals;
 	return { ...status, holds: ownership.holds, starterHold: ownership.starter };
+}
+
+/** The risk the PR body records, judged against the head as {@link Status.risk} describes. */
+function risk(body: string, head: string, record: ReviewRecord | null): Status["risk"] {
+	const recorded = recordedRisk(body);
+	if (recorded === null) return null;
+	const state = record?.state ?? (head.startsWith(recorded.head) ? "current" : "stale");
+	return { tier: recorded.tier, reason: recorded.reason, classified: recorded.classified, state };
 }
 
 async function reviewRecord(
@@ -510,6 +525,7 @@ function summarize(
 		reviews: [...latest.values()],
 		checkpoints: checkpoints(head, submitted),
 		reviewRecord: null,
+		risk: null,
 		reactions,
 		threads,
 		signals: [],

@@ -2,6 +2,7 @@
 // every repository; a repository's AGENTS.md may override them in prose, which
 // the session following it passes as flags. The model check
 // (quest/m1/model-check.md) audits these lists each milestone.
+import { createHash } from "node:crypto";
 import { type Doc, SIZES, type Size, onMaintainer, size, waits } from "../core";
 import type { HarnessName } from "./agent";
 
@@ -18,6 +19,7 @@ export const DEFAULT_SIZE: Size = "M";
 const sol = (effort: string): Model => ({ harness: "codex", model: "gpt-6.1-sol", effort });
 const opus = (effort: string): Model => ({ harness: "claude", model: "claude-opus-5-5", effort });
 const sonnet = (effort: string): Model => ({ harness: "claude", model: "claude-sonnet-5-5", effort });
+const fable = (effort: string): Model => ({ harness: "claude", model: "claude-fable-5-2", effort });
 
 /**
  * Each size's writers, ranked: a spawn starts the quest on the first that can
@@ -49,16 +51,53 @@ export const REVIEWERS: Record<Size, readonly Model[]> = {
 	XL: [sol("xhigh"), opus("xhigh")],
 };
 
+/** One side of the writer A/B: A runs the size's own first writer, B the alternative. */
+export type Arm = "A" | "B";
+export const ARM_NAMES: readonly Arm[] = ["A", "B"];
+
 /**
- * The writers that start quest `doc`: its size's list, or the next size's
- * while a `Maintainer:` wait leaves it a decision to settle.
+ * The models that set a PR's risk tier from its diff, ranked: the first that
+ * can run classifies, past any logged out or at its usage limit. The tier never depends on who wrote the change,
+ * so the list is the same for every PR, unlike the reviewers'. Haiku is the
+ * cheapest, and the classifier's prompt stays below the 100k input tokens past
+ * which it costs five times as much.
  */
-export function questWriters(doc: Doc): readonly Model[] {
+export const CLASSIFIERS: readonly Model[] = [
+	{ harness: "claude", model: "claude-haiku-5-5", effort: "low" },
+	sol("low"),
+];
+
+/**
+ * The writer A/B: each armed size's quests split between its first writer
+ * and an alternative where published results disagree, until the readout in
+ * quest/m0/routing-evidence/README.md deletes it. L runs no arm.
+ */
+export const ARMS: Partial<Record<Size, Record<Arm, Model>>> = {
+	XS: { A: sonnet("high"), B: opus("medium") },
+	S: { A: opus("medium"), B: sonnet("high") },
+	M: { A: opus("medium"), B: opus("high") },
+	XL: { A: opus("xhigh"), B: fable("medium") },
+};
+
+/**
+ * The writers that start quest `doc`, ranked, and its writer A/B arm. A quest
+ * whose size runs an arm starts on the arm's entry, then the size's list
+ * without it; the arm hashes the quest's path, so a restart or respawn draws
+ * the same one. A `Maintainer:` wait leaves it a decision to settle, so it
+ * runs the next size's list and no arm, which keeps each arm at its PR's size.
+ */
+export function questWriters(doc: Doc): { arm: Arm | null; models: readonly Model[] } {
 	const sized = size(doc);
 	// `quest check` requires a size of every quest that is not an epic, and only those can be ready.
 	if (sized === null) throw new Error(`${doc.path} has no size`);
-	const bump = waits(doc).some(onMaintainer) ? 1 : 0;
-	return WRITERS[SIZES[Math.min(SIZES.indexOf(sized) + bump, SIZES.length - 1)]];
+	if (waits(doc).some(onMaintainer))
+		return { arm: null, models: WRITERS[SIZES[Math.min(SIZES.indexOf(sized) + 1, SIZES.length - 1)]!] };
+	const arms = ARMS[sized];
+	if (!arms) return { arm: null, models: WRITERS[sized] };
+	const arm = ARM_NAMES[createHash("sha256").update(doc.path).digest()[0]! & 1]!;
+	const entry = arms[arm];
+	const same = (e: Model) => e.model === entry.model;
+	return { arm, models: [entry, ...WRITERS[sized].filter((e) => !same(e))] };
 }
 
 /**

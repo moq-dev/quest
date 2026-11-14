@@ -3,7 +3,15 @@
 // host's one sender uploads a session's copies in order, so the latest upload is the newest copy.
 
 /** What a session did for its PRs. */
-export const ROLES = ["planning", "implementing", "iterating", "reviewing", "merging", "coordinating"] as const;
+export const ROLES = [
+	"planning",
+	"implementing",
+	"iterating",
+	"reviewing",
+	"classifying",
+	"merging",
+	"coordinating",
+] as const;
 export type Role = (typeof ROLES)[number];
 
 /**

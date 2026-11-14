@@ -123,7 +123,7 @@ checkpoints and outages to count by hand:
     [video](https://www.youtube.com/watch?v=XtykeVoSmP8) estimates about
     $3k a month of Fable against $14k of Opus on the $200 plan). XS stays Sonnet high, since `quest usage` had no
     Sonnet medium runs to compare. The
-    [writer A/B](/quest/m0/routing-evidence/writer-ab.md) tests each change
+    writer A/B ([moq-dev/quest#720](https://github.com/moq-dev/quest/pull/720)) tests each change
     against its alternative, Fable medium on XL included; tally the S cell
     fresh.
 - Compare both tables' models (in `src/cli/models.ts`) with each vendor's current models: the newest

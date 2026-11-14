@@ -151,11 +151,13 @@ test("a document that is not UTF-8 is an error", () => {
 test("unblocked prints ranked counts and paths, with deterministic JSON and a limit", () => {
 	const tree = Tree.baseline();
 	expect(tree.run("unblocked")).toEqual({ code: 0, stdout: "1\tquest/m0/epic/one.md\n", stderr: "" });
+	const sonnetHigh = '{"harness":"claude","model":"claude-sonnet-5-5","effort":"high"}';
 	const opusMedium = '{"harness":"claude","model":"claude-opus-5-5","effort":"medium"}';
 	const solMedium = '{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}';
+	// Its path hashes to arm B, which S runs on Sonnet before the size's own list.
 	expect(tree.run("unblocked", "--json", "--limit", "1")).toEqual({
 		code: 0,
-		stdout: `[{"path":"quest/m0/epic/one.md","dependents":1,"hosts":[],"models":[${opusMedium},${solMedium}]}]\n`,
+		stdout: `[{"path":"quest/m0/epic/one.md","dependents":1,"hosts":[],"arm":"B","models":[${sonnetHigh},${opusMedium},${solMedium}]}]\n`,
 		stderr: "",
 	});
 	tree.write("quest/m0/epic/two.md", "# [S] Two\n\n## Goal\n\nWork.\n");
@@ -170,15 +172,19 @@ test("unblocked reports the hosts a quest names", () => {
 
 test("unblocked routes a quest with a decision open one size up, and XL stays XL", () => {
 	const models = (tree: Tree) =>
-		JSON.parse(tree.run("unblocked", "--json").stdout).map((quest: { models: { effort: string }[] }) =>
-			quest.models.map((entry) => entry.effort).join(" "),
+		JSON.parse(tree.run("unblocked", "--json").stdout).map(
+			(quest: { arm: string | null; models: { effort: string }[] }) =>
+				[String(quest.arm), ...quest.models.map((entry) => entry.effort)].join(" "),
 		);
+	// Its path hashes to arm B at every size that runs one; a decision left open runs no arm.
 	const tree = Tree.baseline().append("quest/m0/epic/one.md", "\n## Waiting\n\n- moq-dev/moq: a release.\n");
-	expect(models(tree)).toEqual(["medium medium"]);
+	expect(models(tree)).toEqual(["B high medium medium"]);
 	tree.append("quest/m0/epic/one.md", "- Maintainer: pick a name.\n");
-	expect(models(tree)).toEqual(["medium high"]);
+	expect(models(tree)).toEqual(["null medium high"]);
 	tree.write("quest/m0/epic/one.md", "# [XL] One\n\n## Goal\n\nWork.\n\n## Waiting\n\n- Maintainer: pick.\n");
-	expect(models(tree)).toEqual(["xhigh"]);
+	expect(models(tree)).toEqual(["null xhigh"]);
+	tree.write("quest/m0/epic/one.md", "# [XL] One\n\n## Goal\n\nWork.\n");
+	expect(models(tree)).toEqual(["B medium xhigh"]);
 });
 
 test("models ranks a size's writers, or the one entry that runs a PR's writer", () => {
@@ -201,6 +207,33 @@ test("models ranks a size's writers, or the one entry that runs a PR's writer", 
 	expect(unknown.code).toBe(2);
 	expect(unknown.stderr).toContain("no write list names unknown");
 	expect(tree.run("models", "XXL").code).toBe(2);
+	const arm = (size: string, name: string) => tree.run("models", size, "--arm", name);
+	expect(arm("M", "B").stdout).toBe("claude\tclaude-opus-5-5\thigh\n");
+	expect(arm("XL", "B").stdout).toBe("claude\tclaude-fable-5-2\tmedium\n");
+	expect(arm("XS", "A").stdout).toBe("claude\tclaude-sonnet-5-5\thigh\n");
+	expect(arm("L", "A")).toMatchObject({ code: 2, stderr: expect.stringContaining("L runs no writer arms") });
+	expect(arm("M", "C").code).toBe(2);
+	expect(tree.run("models", "M", "--arm", "A", "--writer", "claude-opus-5-5").code).toBe(2);
+});
+
+test("unblocked splits a size's quests between its arms by path, and keeps each quest's arm", () => {
+	const tree = Tree.baseline();
+	for (let n = 0; n < 40; n++) tree.write(`quest/m0/epic/q${n}.md`, `# [M] Q${n}\n\n## Goal\n\nWork.\n`);
+	const arms = () =>
+		Object.fromEntries(
+			JSON.parse(tree.run("unblocked", "--json").stdout).map((quest: { path: string; arm: string }) => [
+				quest.path,
+				quest.arm,
+			]),
+		);
+	const first = arms();
+	const counts = Object.values(first).reduce<Record<string, number>>(
+		(sum, name) => ({ ...sum, [String(name)]: (sum[String(name)] ?? 0) + 1 }),
+		{},
+	);
+	// The 40 new quests, and one.md's B.
+	expect(counts).toEqual({ A: 21, B: 20 });
+	expect(arms()).toEqual(first);
 });
 
 test("unblocked explains the count on a terminal, including NO_COLOR", () => {

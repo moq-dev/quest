@@ -328,6 +328,7 @@ describe("buildRecords", () => {
 				[b, p2],
 			]),
 			reviewers: new Set(),
+			classifiers: new Set(),
 			waits: [
 				logged("gate-run", "10:40:00", ["run"], "/w/.worktrees/a/src"),
 				logged("gate-queue", "10:25:00", ["run"], "/w"),
@@ -378,6 +379,7 @@ describe("buildRecords", () => {
 				[remote, p],
 			]),
 			reviewers: new Set(["r"]),
+			classifiers: new Set(["far"]),
 			waits: [
 				{
 					...logged("gate-run", "10:40:00", []),
@@ -390,6 +392,7 @@ describe("buildRecords", () => {
 			since: 0,
 		});
 		expect(records.get(merger)).toMatchObject({ role: "merging", waits: [] });
+		expect(records.get(remote)!.role).toBe("classifying");
 		expect(records.get(reviewer)!.role).toBe("reviewing");
 		expect(records.get(reviewer)!.waits!.map((w) => w.kind)).toEqual(["gate-run"]);
 		expect(records.get(remote)!.waits).toBeNull();
@@ -404,6 +407,7 @@ describe("buildRecords", () => {
 			sessions: [on, off],
 			own: new Map([[on, pull(1, "quest/m0/a", "09:00:00")]]),
 			reviewers: new Set(),
+			classifiers: new Set(),
 			waits: [],
 			since: 0,
 		});
@@ -422,6 +426,7 @@ describe("buildRecords", () => {
 				[named, pull(1, "quest/m0/a", "09:00:00")],
 			]),
 			reviewers: new Set(),
+			classifiers: new Set(),
 			// Begun at 10:10, before the window opened at 10:20 and before the session's first request in it.
 			waits: [{ ...logged("pull", "10:10:00", ["n"]), end: "2026-11-06T10:40:00.000Z" }],
 			since: at("10:20:00"),
@@ -457,6 +462,7 @@ describe("buildRecords", () => {
 				[skipped, p],
 			]),
 			reviewers: new Set<string>(),
+			classifiers: new Set<string>(),
 			waits: [],
 			since: at("09:00:00"),
 		};
