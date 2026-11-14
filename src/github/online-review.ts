@@ -60,32 +60,43 @@ const FIELDS = {
 		"id isResolved resolvedBy { __typename login } " +
 		`comments(first: 100) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_COMMENT} } }`,
 	comments: "author { __typename login } authorAssociation body createdAt url",
+	// Each edit's `diff` is the whole body as that edit left it, so the earliest one is the body the PR opened with.
+	userContentEdits: "diff",
 } as const;
 type Connection = keyof typeof FIELDS;
-const CONNECTIONS = Object.keys(FIELDS) as Connection[];
+/** The connections every read brings; a caller adds `userContentEdits` when it needs the PR's earlier bodies. */
+const CONNECTIONS: Connection[] = ["reviews", "reviewThreads", "comments"];
 const page = (name: Connection, after: string) =>
 	`${name}(first: ${name === "reviewThreads" ? 50 : 100}${after}) { pageInfo { hasNextPage endCursor } nodes { ${FIELDS[name]} } }`;
 
-/** PRs read per query; each brings at most 100 reviews, 50 threads of 100 comments, and 100 comments. */
+/** PRs read per query; each brings at most 100 reviews, 50 threads of 100 comments, 100 comments, and 100 body edits when asked. */
 const BATCH = 10;
 
 /**
  * A PR's last head and its committer date, and its reviews, review threads, and comments as GitHub's GraphQL API gives
  * them; `moved` when a later page found a newer head, so the pages may mix two heads' activity.
  */
-export type Activity = Record<Connection, ObjectValue[]> & { head: string; committed: string; moved?: boolean };
+export type Activity = Record<Exclude<Connection, "userContentEdits">, ObjectValue[]> & {
+	/** The PR's body edits, read only when asked. */
+	userContentEdits?: ObjectValue[];
+	head: string;
+	committed: string;
+	moved?: boolean;
+};
 
 /** Each PR's reviews, review threads, and comments, and its head, read in batches and then in pages. */
 export async function readActivity(
 	client: GitHub,
 	repository: Repository,
 	numbers: number[],
+	extra: "userContentEdits"[] = [],
 ): Promise<Map<number, Activity>> {
+	const connections = [...CONNECTIONS, ...extra];
 	const pulls = new Map<number, Activity>();
 	const more: { number: number; cursors: Partial<Record<Connection, string>> }[] = [];
 	for (let start = 0; start < numbers.length; start += BATCH) {
 		const batch = numbers.slice(start, start + BATCH);
-		const fields = `headRefOid commits(last: 1) { nodes { commit { oid committedDate } } } ${CONNECTIONS.map((name) => page(name, "")).join(" ")}`;
+		const fields = `headRefOid commits(last: 1) { nodes { commit { oid committedDate } } } ${connections.map((name) => page(name, "")).join(" ")}`;
 		const data = await client.graphql(
 			`query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${batch
 				.map((number) => `p${number}: pullRequest(number: ${number}) { ${fields} }`)
@@ -103,7 +114,7 @@ export async function readActivity(
 				throw new Error(`the head of PR #${number} changed while it was read; retry`);
 			const nodes = { head: String(pull.headRefOid), committed: String(commit.committedDate) } as Activity;
 			const cursors: Partial<Record<Connection, string>> = {};
-			for (const name of CONNECTIONS) {
+			for (const name of connections) {
 				const connection = object(pull[name]);
 				nodes[name] = array(connection.nodes);
 				const info = object(connection.pageInfo);
@@ -116,7 +127,7 @@ export async function readActivity(
 	for (const { number, cursors } of more) {
 		const nodes = pulls.get(number)!;
 		for (let left = cursors; Object.keys(left).length;) {
-			const names = CONNECTIONS.filter((name) => left[name] !== undefined);
+			const names = connections.filter((name) => left[name] !== undefined);
 			const data = await client.graphql(
 				`query($owner: String!, $name: String!, $number: Int!, ${names.map((name) => `$${name}: String!`).join(", ")}) { ` +
 					`repository(owner: $owner, name: $name) { pullRequest(number: $number) { headRefOid ${names
@@ -130,7 +141,7 @@ export async function readActivity(
 			const next: Partial<Record<Connection, string>> = {};
 			for (const name of names) {
 				const connection = object(pull[name]);
-				nodes[name].push(...array(connection.nodes));
+				nodes[name]!.push(...array(connection.nodes));
 				const info = object(connection.pageInfo);
 				if (info.hasNextPage === true) next[name] = String(info.endCursor);
 			}
@@ -288,12 +299,22 @@ export function onlineReviews(pull: Activity): OnlineReview[] {
 	return [...records.values()].sort((a, b) => a.reviewer.localeCompare(b.reviewer));
 }
 
-/** Each PR's online reviews, by number. */
+/** Each PR's online reviews, and every body its edits left, by number. */
 export async function readOnlineReviews(
 	client: GitHub,
 	repository: Repository,
 	numbers: number[],
-): Promise<Map<number, OnlineReview[]>> {
-	const pulls = await readActivity(client, repository, numbers);
-	return new Map([...pulls].map(([number, pull]) => [number, onlineReviews(pull)]));
+): Promise<Map<number, { online: OnlineReview[]; bodies: string[] }>> {
+	const pulls = await readActivity(client, repository, numbers, ["userContentEdits"]);
+	return new Map(
+		[...pulls].map(([number, pull]) => [
+			number,
+			{
+				online: onlineReviews(pull),
+				bodies: (pull.userContentEdits ?? []).flatMap((edit) =>
+					typeof edit.diff === "string" ? [edit.diff] : [],
+				),
+			},
+		]),
+	);
 }

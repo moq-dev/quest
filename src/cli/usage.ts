@@ -81,7 +81,7 @@ export interface PullRow {
 	repository: string | null;
 	state: "open" | "closed" | "merged";
 	draft: boolean;
-	/** Its body has a `## Waiting` section, so it was handed back to the maintainer. */
+	/** Its body, as a draft now or any earlier version, had a `## Waiting` section, so it was handed back to the maintainer. */
 	handedBack: boolean;
 	size: Size | null;
 	implementers: { harness: string; model: string; effort: string; size: Size | null; arm: Arm | null }[];
@@ -1035,7 +1035,12 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		repository,
 		rows.map((row) => row.number),
 	);
-	for (const row of rows) row.online = online.get(row.number) ?? [];
+	for (const row of rows) {
+		const read = online.get(row.number);
+		row.online = read?.online ?? [];
+		// `quest ready` and hand edits drop the section before merge, so an earlier body counts too.
+		if (read?.bodies.some(handedBack)) row.handedBack = true;
+	}
 	return {
 		repository: key(repository),
 		since: options.since,
