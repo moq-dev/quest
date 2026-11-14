@@ -10,6 +10,7 @@ import type { Risk, Round, Tally } from "../src/cli/review";
 import { classifierSessions, parseReview, reviewRecord, reviewSessions } from "../src/cli/review-record";
 import { type Session, causes, fold, parseSessions, share, usage, usageLines } from "../src/cli/usage";
 import type { LoggedWait } from "../src/cli/waits";
+import { SPLIT_CATEGORIES, type TimeSplit } from "../src/core";
 import { tempDir } from "./fixture";
 
 const THREAD = "01a1b8e8-8fca-7793-99d1-062f41f8a7b0";
@@ -774,6 +775,7 @@ describe("usage", () => {
 				return exported;
 			},
 			waits: () => waits,
+			split: () => null,
 		});
 		return { root, deps, sessions, calls, requests };
 	}
@@ -789,6 +791,37 @@ describe("usage", () => {
 			(s) => s.role === "implementing" && s.model === spent.model && s.effort === (spent.effort ?? "unknown"),
 		)!;
 		expect([row.sessions, row.cost]).toEqual([3, 3 * known.cost]);
+	});
+
+	test("sums each local session's time split per PR and per role, with its notes and check", async () => {
+		const { root, deps, sessions } = setup();
+		const minutes = (n: number) => ({ ms: n * 60_000, tokens: n });
+		const categories = Object.fromEntries(SPLIT_CATEGORIES.map((c) => [c, minutes(0)])) as TimeSplit["categories"];
+		const split: TimeSplit = {
+			categories: { ...categories, writing: minutes(30), testing: minutes(10), idle: minutes(60) },
+			notes: ["a merge conflict was resolved twice"],
+			check: { ms: 600_000, disagreed: 60_000 },
+			usage: [
+				{ harness: "claude", model: "claude-haiku-5-5", effort: "low", input: 2000, cached: 500, output: 30 },
+			],
+		};
+		const report = await usage(
+			root,
+			{ since: "2026-11-05" },
+			{
+				...deps(sessions),
+				split: (session) => (session.id === CLAUDE ? split : null),
+			},
+		);
+		const row = report.splits.find((r) => r.sessions > 0)!;
+		expect(row.categories.writing.ms).toBe(1_800_000);
+		expect([row.checked, row.disagreed, row.notes]).toEqual([600_000, 60_000, 1]);
+		const text = usageLines(report).join("\n");
+		expect(text).toContain("time: writing 30m (75%), testing 10m (25%), idle 60m");
+		expect(text).toContain("went wrong (");
+		expect(text).toContain(
+			"checked 10m, 10% labeled differently; labeling took claude-haiku-5-5 low in 2.0k (500 cached), out 30",
+		);
 	});
 
 	test("ties each session to its PR and role, and rolls up spend and accuracy", async () => {

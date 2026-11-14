@@ -1,5 +1,5 @@
 // Each session's record, as `quest usage` prints it and the stop hook sends it: its PRs, role, spend, and waits.
-import { type Role, type SessionRecord, type SessionWait, branchQuest } from "../core";
+import { type Role, type SessionRecord, type SessionWait, type TimeSplit, branchQuest } from "../core";
 import { type TranscriptFacts, transcriptFacts } from "./transcript";
 import type { Pull, Session } from "./usage";
 import type { LoggedWait } from "./waits";
@@ -44,6 +44,8 @@ export interface RecordInput {
 	emit?: Set<Session>;
 	/** The window's start, epoch ms: a person's wait that ended before it, like a logged one, is left out. */
 	since: number;
+	/** A local session's time split given its timed waits, or null while it has none; every split is null without it. */
+	split?: (session: Session, waits: SessionWait[]) => TimeSplit | null;
 }
 
 const id = (harness: string, session: string) => `${harness}\0${session}`;
@@ -136,6 +138,13 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 				end: iso(q.end),
 				until: null,
 			}));
+		const timed: SessionWait[] | null =
+			local === null
+				? null
+				: [
+						...(waits.get(s) ?? []).map(({ kind, start, end, until }) => ({ kind, start, end, until })),
+						...person,
+					].sort((a, b) => a.start.localeCompare(b.start));
 		records.set(s, {
 			harness: s.harness,
 			session: s.id,
@@ -159,13 +168,8 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 			complete: s.complete,
 			start: iso(s.start),
 			end: iso(s.end),
-			waits:
-				local === null
-					? null
-					: [
-							...(waits.get(s) ?? []).map(({ kind, start, end, until }) => ({ kind, start, end, until })),
-							...person,
-						].sort((a, b) => a.start.localeCompare(b.start)),
+			waits: timed,
+			split: timed === null || !input.split ? null : input.split(s, timed),
 		});
 	}
 	return records;

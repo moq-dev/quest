@@ -23,8 +23,18 @@ import {
 	severityText,
 } from "./review-record";
 import { SEVERITIES } from "./review";
-import { ROLES, type Role, type SessionRecord, WAIT_KINDS } from "../core";
-import { buildRecords } from "./records";
+import {
+	ROLES,
+	type Role,
+	SPLIT_CATEGORIES,
+	type SessionRecord,
+	type SplitUsage,
+	type TimeSplit,
+	WAIT_KINDS,
+} from "../core";
+import { type RecordInput, buildRecords } from "./records";
+import { stateDirectory } from "./send";
+import { keptSplit } from "./split";
 import { type LoggedWait, readWaits } from "./waits";
 
 /** A session's tokens, and their cost at the model's API list price, which subscriptions do not bill. */
@@ -197,6 +207,21 @@ export interface OnlineRow {
 	unanswered: number;
 }
 
+/** One role's time splits, summed over its sessions that have one, each session once. */
+export interface SplitRow {
+	role: Role;
+	/** Sessions with a split, and those without one yet or read on another host. */
+	sessions: number;
+	unsplit: number;
+	categories: TimeSplit["categories"];
+	/** The time a stronger model labeled again, and the part it labeled differently. */
+	checked: number;
+	disagreed: number;
+	notes: number;
+	/** What labeling took, by model. */
+	usage: SplitUsage[];
+}
+
 export interface Usage {
 	repository: string;
 	since: string;
@@ -210,6 +235,8 @@ export interface Usage {
 	arms: ArmRow[];
 	tiers: TierRow[];
 	online: OnlineRow[];
+	/** Where each role's time went. */
+	splits: SplitRow[];
 	/** The sessions on no PR reported here, from every repository and agent token-max reads; null when narrowed. */
 	unattributed: ({ sessions: number } & Tokens) | null;
 	/** Copies of a session found on several hosts, left out for its costliest copy, and the hosts they came from. */
@@ -232,6 +259,8 @@ export interface UsageDependencies extends ClaimDependencies {
 	sessions(since: Date, ssh: string[]): Session[] | null;
 	/** The waits logged on this host that ended since an instant, epoch ms. */
 	waits(since: number): LoggedWait[];
+	/** A local session's time split from the labels the record sender kept, never asking a model. */
+	split: NonNullable<RecordInput["split"]>;
 }
 
 /** The install hint printed when token-max is missing. */
@@ -559,11 +588,13 @@ export interface RecordSources {
 	emit?: Set<Session>;
 	/** The window's start, epoch ms. */
 	since: number;
+	/** A local session's time split, or null while it has none. */
+	split?: RecordInput["split"];
 }
 
 /** Each session's record, attributed to the PRs in the window, whose review records name their reviewers and classifier. */
 export function sessionRecords(sources: RecordSources): Map<Session, SessionRecord> {
-	const { repository, sessions, evidence, pulls, waits, emit, since } = sources;
+	const { repository, sessions, evidence, pulls, waits, emit, since, split } = sources;
 	// Only the reviewer sessions are read, so no PR author can stop every session's record with a body this version
 	// cannot parse.
 	const reviewers = new Set(pulls.flatMap((pull) => reviewSessions(pull.body)));
@@ -577,6 +608,7 @@ export function sessionRecords(sources: RecordSources): Map<Session, SessionReco
 		waits,
 		emit,
 		since,
+		split,
 	});
 }
 
@@ -1006,6 +1038,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 			pulls: all,
 			waits: deps.waits(since),
 			since,
+			split: deps.split,
 		});
 		const attributed: Session[] = [];
 		const left: Session[] = [];
@@ -1052,6 +1085,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		arms: armRows(rows),
 		tiers: tierRows(rows),
 		online: onlineRows(rows),
+		splits: splitRows(rows),
 		unattributed,
 		folded: { copies: folded.length, hosts: [...new Set(folded.map((session) => session.host))] },
 		incomplete: incomplete.map((session) => ({
@@ -1090,6 +1124,88 @@ const duration = (ms: number) =>
 		: ms >= 7_200_000
 			? `${(ms / 3_600_000).toFixed(1)}h`
 			: `${Math.round(ms / 60_000)}m`;
+
+const noCategories = () =>
+	Object.fromEntries(SPLIT_CATEGORIES.map((c) => [c, { ms: 0, tokens: 0 }])) as TimeSplit["categories"];
+
+/** Each role's splits, summed over the reported PRs' sessions, a session on several PRs once. */
+function splitRows(pulls: PullRow[]): SplitRow[] {
+	const rows = new Map<Role, SplitRow>();
+	const seen = new Set<string>();
+	for (const each of pulls)
+		for (const session of each.sessions) {
+			if (seen.has(identity(session))) continue;
+			seen.add(identity(session));
+			let row = rows.get(session.role);
+			if (!row) {
+				row = {
+					role: session.role,
+					sessions: 0,
+					unsplit: 0,
+					categories: noCategories(),
+					checked: 0,
+					disagreed: 0,
+					notes: 0,
+					usage: [],
+				};
+				rows.set(session.role, row);
+			}
+			const split = session.split;
+			if (split === null) {
+				row.unsplit++;
+				continue;
+			}
+			row.sessions++;
+			for (const c of SPLIT_CATEGORIES) {
+				row.categories[c].ms += split.categories[c].ms;
+				row.categories[c].tokens += split.categories[c].tokens;
+			}
+			row.checked += split.check?.ms ?? 0;
+			row.disagreed += split.check?.disagreed ?? 0;
+			row.notes += split.notes.length;
+			for (const u of split.usage) {
+				const to = row.usage.find(
+					(x) => x.harness === u.harness && x.model === u.model && x.effort === u.effort,
+				);
+				if (to) {
+					to.input += u.input;
+					to.cached += u.cached;
+					to.output += u.output;
+				} else row.usage.push({ ...u });
+			}
+		}
+	const roles: readonly Role[] = ROLES;
+	return [...rows.values()].sort((a, b) => roles.indexOf(a.role) - roles.indexOf(b.role));
+}
+
+/** Each category with time, most first, as a share of the working time, then idle; empty when there is none. */
+function categoryText(categories: TimeSplit["categories"]): string {
+	const working = SPLIT_CATEGORIES.filter((c) => c !== "idle");
+	const total = working.reduce((sum, c) => sum + categories[c].ms, 0);
+	const parts = working
+		.filter((c) => categories[c].ms >= 1000)
+		.sort((a, b) => categories[b].ms - categories[a].ms)
+		.map((c) => `${c} ${duration(categories[c].ms)} (${percent(categories[c].ms, total)})`);
+	if (categories.idle.ms >= 1000) parts.push(`idle ${duration(categories.idle.ms)}`);
+	return parts.join(", ");
+}
+
+/** A PR's sessions' time by category, a shared session's in its share, and how many have no split. */
+function splitTotals(sessions: SessionRow[]): string {
+	const totals = noCategories();
+	let unsplit = 0;
+	for (const s of sessions) {
+		if (s.split === null) unsplit++;
+		else
+			for (const c of SPLIT_CATEGORIES) {
+				totals[c].ms += s.split.categories[c].ms / s.pulls.length;
+				totals[c].tokens += s.split.categories[c].tokens / s.pulls.length;
+			}
+	}
+	const text = categoryText(totals);
+	const missing = unsplit ? `${unsplit} session${unsplit === 1 ? "" : "s"} not split` : "";
+	return [text, missing].filter(Boolean).join("; ");
+}
 
 /**
  * The time a PR's sessions spent in each kind of wait, a shared session's in its share, and how many sessions'
@@ -1161,6 +1277,10 @@ export function usageLines(report: Usage): string[] {
 		if (sessions.length) lines.push("  sessions:", ...table(sessions));
 		const waited = waitTotals(row.sessions);
 		if (waited) lines.push(`  waits: ${waited}`);
+		const spent = splitTotals(row.sessions);
+		if (spent) lines.push(`  time: ${spent}`);
+		for (const s of row.sessions)
+			for (const note of s.split?.notes ?? []) lines.push(`  went wrong (${s.role}): ${note}`);
 	}
 	if (report.spend.length)
 		lines.push(
@@ -1249,6 +1369,22 @@ export function usageLines(report: Usage): string[] {
 				]),
 			),
 		);
+	if (report.splits.some((r) => r.sessions > 0))
+		lines.push(
+			"",
+			"Time by role, beyond timed waits:",
+			...report.splits.flatMap((r) => [
+				`  ${r.role}, ${r.sessions} split${r.unsplit ? `, ${r.unsplit} not` : ""}: ${categoryText(r.categories) || "no time"}`,
+				`    ${r.notes} notes; checked ${duration(r.checked)}, ${percent(r.disagreed, r.checked)} labeled differently; labeling took ${
+					r.usage
+						.map(
+							(u) =>
+								`${u.model} ${u.effort} in ${compact(u.input)} (${compact(u.cached)} cached), out ${compact(u.output)}`,
+						)
+						.join(", ") || "nothing"
+				}`,
+			]),
+		);
 	const u = report.unattributed;
 	if (u) lines.push("", `Unattributed: ${u.sessions} sessions on no PR here, any repository or agent: ${tokens(u)}`);
 	const host = (name: string | null) => name ?? "local";
@@ -1277,5 +1413,11 @@ export function usageLines(report: Usage): string[] {
 
 /** The dependencies `quest usage` runs with. */
 export function usageDependencies(github: ClaimDependencies): UsageDependencies {
-	return { ...github, sessions: runTokenMax, waits: (since) => readWaits(since) };
+	const state = stateDirectory(process.env);
+	return {
+		...github,
+		sessions: runTokenMax,
+		waits: (since) => readWaits(since),
+		split: (session, waits) => keptSplit(state, session, waits),
+	};
 }

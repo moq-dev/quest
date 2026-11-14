@@ -57,6 +57,8 @@ import {
 	type Arm,
 	CLASSIFIERS,
 	DEFAULT_SIZE,
+	SPLITTERS,
+	SPLIT_CHECKERS,
 	REVIEWERS,
 	WRITERS,
 	questWriters,
@@ -66,6 +68,7 @@ import {
 	ReviewInputError,
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
+	ask,
 	review,
 	nextStep,
 	roundLines,
@@ -1241,7 +1244,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"the PRs updated since then, and replaces its earlier copy, so a resend never doubles. An endpoint that " +
 				"refuses the token (401 or 403) is sent nothing more until the token changes; any other failure keeps the " +
 				"sessions queued, retried after a minute and then twice as long each time up to six hours, and the next " +
-				"stop hook says so once. Exactly one sender runs per user, " +
+				"stop hook says so once. Before a record is built, a cheap model, " +
+				`${SPLITTERS.map((e) => `${e.harness} ${e.model} ${e.effort}`).join(", then ")}, labels each step of its session's ` +
+				"transcript not labeled yet with a category of work, and about one part in ten is labeled again by " +
+				`${SPLIT_CHECKERS.map((e) => `${e.harness} ${e.model} ${e.effort}`).join(", then ")}; the record's split sums each ` +
+				"category's time, less its timed waits, and tokens, with a line on what went wrong. Only the categories and " +
+				"notes leave the host, and a failure to label is a failure like any other. Exactly one sender runs per user, " +
 				"as the service quest records install sets up; start no other.\n\nUses GH_TOKEN, GITHUB_TOKEN, or gh auth token.",
 		)
 		.action(() => {
@@ -1253,6 +1261,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 						github: () => gitHubDependencies(warn),
 						sessions: (since) => runTokenMax(since, []),
 						waits: (since) => readWaits(since),
+						ask,
 						fetch: globalThis.fetch,
 						sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
 						now: Date.now,

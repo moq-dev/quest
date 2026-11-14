@@ -151,6 +151,9 @@ function sender(
 			return sessions;
 		},
 		waits: () => [],
+		ask: async () => {
+			throw new Error("no model can label here");
+		},
 		now: () => clock.now,
 		sleep: async (ms) => {
 			slept.push(ms);
@@ -191,6 +194,42 @@ test("the sender posts each queued session with its sub-agents, from its transcr
 		["s1", [7], "implementing", "quest/m0/a.md"],
 		["sub", [7], "implementing", "quest/m0/a.md"],
 	]);
+	expect(pending(env)).toEqual([]);
+});
+
+test("the sender labels each session's steps and sends its split; a model that cannot label keeps it queued", async () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	queue(stopped(root), env);
+	const file = join(tempDir(), "s1.jsonl");
+	writeFileSync(
+		file,
+		[
+			{ type: "user", timestamp: "2026-11-06T10:00:00Z", message: { content: "Go" } },
+			{
+				type: "assistant",
+				timestamp: "2026-11-06T10:05:00Z",
+				message: { content: [{ type: "text", text: "Hi" }] },
+			},
+		]
+			.map((r) => JSON.stringify(r))
+			.join("\n") + "\n",
+	);
+	const sessions = [session("s1", "quest/m0/a", { files: [file] })];
+	const failing = sender(env, 200, sessions);
+	await expect(sendPass(failing.deps)).rejects.toThrow("no model");
+	expect(pending(env)).toHaveLength(1);
+	failing.clock.now += 3_600_000;
+	const { deps, uploads } = sender(env, 200, sessions);
+	deps.ask = async (entries) => ({
+		entry: entries[0]!,
+		session: "x",
+		value: { ranges: [{ from: 0, to: 0, category: "writing" }], note: "" },
+		usage: { input: 5, cached: 0, output: 1 },
+	});
+	await sendPass(deps);
+	const [record] = parseUpload(uploads[0]!.body).records;
+	expect(record!.split?.categories.writing.ms).toBe(300_000);
 	expect(pending(env)).toEqual([]);
 });
 

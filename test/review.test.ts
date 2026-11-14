@@ -13,6 +13,8 @@ import {
 	type Tally,
 	authored,
 	baseInstructions,
+	claudeFlags,
+	codexFlags,
 	nextStep,
 	pickReviewer,
 	review,
@@ -1564,6 +1566,9 @@ fakes("without a logged-in Claude Code, Codex classifies", async () => {
 	expect(call.argv.slice(0, 2)).toEqual(["exec", "--json"]);
 	expect(call.argv).toContain('model_reasoning_effort="low"');
 	expect(call.argv).toContain('sandbox_mode="read-only"');
+	// The classifier may read the diff in parts, so only the user's connected apps are off.
+	expect(call.argv).toContain("features.apps=false");
+	expect(call.argv).not.toContain("features.shell_tool=false");
 	const file = call.argv[call.argv.indexOf("--output-schema") + 1]!;
 	expect(JSON.parse(readFileSync(file, "utf8")).required).toEqual(["tier", "reason"]);
 	// Each schema has a file named by its content, since every worktree of the clone, on any release, writes there.
@@ -2447,4 +2452,27 @@ test("a tally counts each finding once, by who raised it, through every round", 
 			],
 		),
 	).toThrow(/no tally/);
+});
+
+test("a question about data alone runs with no tools on either CLI", () => {
+	const context = {
+		mergeBase: "",
+		instructions: "i",
+		model: "m",
+		effort: "low",
+		schema: {},
+		schemaFile: "/s.json",
+	};
+	const claude = claudeFlags({ ...context, tools: "" });
+	expect(claude[claude.indexOf("--tools") + 1]).toBe("");
+	expect(claudeFlags(context)[claudeFlags(context).indexOf("--tools") + 1]).toBe("Read,Grep,Glob,Bash,Agent");
+	const codex = codexFlags({ ...context, tools: "" });
+	for (const off of [
+		"features.apps=false",
+		"features.shell_tool=false",
+		"features.unified_exec=false",
+		'web_search="disabled"',
+	])
+		expect(codex).toContain(off);
+	expect(codexFlags(context)).not.toContain("features.shell_tool=false");
 });
