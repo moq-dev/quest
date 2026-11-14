@@ -42,8 +42,9 @@ checkpoints and outages to count by hand:
 - Move a size to a stronger model or effort where its PRs needed clearly
   more rounds or fixes than the size above, and to a cheaper one where its
   reviews come back clean. Do the same for the review efforts in `src/cli/models.ts`
-  from what later reviews and follow-ups found that a review missed. Record the tallies in
-  the next run's Plan as its baseline.
+  from what later reviews and follow-ups found that a review missed, and score each
+  reviewer change with `quest eval run` before recommending it (`README.md`'s Score the
+  reviewer). Record the tallies in the next run's Plan as its baseline.
 - Recommend each change to a list's order, harness, or effort to the
   maintainer with its tally, as a decision in the PR, rather than changing
   it unasked. Replacing a stale model id with the same vendor's newer one,

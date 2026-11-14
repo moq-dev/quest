@@ -1,0 +1,498 @@
+{
+	"repository": "moq-dev/quest",
+	"cases": [
+		{
+			"pull": 160,
+			"base": "d37da2e1cc070c5383566b5627a6d431d32700e1",
+			"head": "630e2abe3fd6696267be16772dd11cfeba424fdc",
+			"size": "S",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 178,
+			"base": "e39c9186d1205fa2b58069aff6908530ca0a99bf",
+			"head": "6fc09242196c908c5f40898a208f85c8c0d696d5",
+			"size": "M",
+			"tier": "high",
+			"reason": "it changes .github/workflows/check.yml, which is always high: workflows run with the repository's secrets and decide what merges and ships",
+			"writer": null,
+			"defects": [
+				{
+					"fix": 589,
+					"what": "alive() treats only ENOENT from reading /proc/<pid>/stat as a gone process, so a process that exits mid-read (Linux reports ESRCH) makes the liveness check throw instead of returning false.",
+					"at": [
+						{
+							"file": "src/cli/supervise.ts",
+							"from": 34,
+							"to": 36
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 186,
+			"base": "a689e26019bed1364e6d5d1be222ebd63f99d9ad",
+			"head": "4d04fe58411c6b26bb2d07a3c1f4f8d5320c37fd",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"defects": [
+				{
+					"fix": 632,
+					"what": "worktree remove counts an unreached commit as preserved only when a merged PR's head is exactly that commit, so a finished checkout whose merged head has later commits on top cannot be removed without --force.",
+					"at": [
+						{
+							"file": "src/cli/github.ts",
+							"from": 239,
+							"to": 239
+						}
+					]
+				},
+				{
+					"fix": 632,
+					"what": "worktree remove refuses any ignored file outside the scratch declared at creation, so a finished checkout holding build output cannot be removed without --force.",
+					"at": [
+						{
+							"file": "src/cli/worktree.ts",
+							"from": 563,
+							"to": 568
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 217,
+			"base": "572de71330ddd174a0aa0b9808d2b2737a0fc61a",
+			"head": "8346d7f32bcb5a8c2b94aa6d5303fbef9bf65619",
+			"size": "XS",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 282,
+			"base": "01d051cf5dca8cd29c664bf8bcbcab63cdc76445",
+			"head": "7081251fdc9e7e3143411ab674aae2f42723e1ed",
+			"size": "M",
+			"tier": "high",
+			"reason": "it changes .github/workflows/land.yml, which is always high: workflows run with the repository's secrets and decide what merges and ships",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 289,
+			"base": "1ef2ca70053ed8bc4785ddaaafb2a6c445e87614",
+			"head": "33fa0f425b1ec556d93492fdfbd3af2020684d3c",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 297,
+			"base": "96f6d2e5ad8a9dc76934c809420a9c7c59751901",
+			"head": "0edb89770c88a6b5a85f9fbe593d5a06a6640333",
+			"size": "L",
+			"tier": "high",
+			"reason": "it changes .github/workflows/land.yml, which is always high: workflows run with the repository's secrets and decide what merges and ships",
+			"writer": null,
+			"defects": [
+				{
+					"fix": 666,
+					"what": "Any failed landing push of a same-repository head or of the base is treated as a permanent refusal that ejects the PR as merge_refused, with no retry for transient GitHub failures such as its intermittent \"Repository not found\".",
+					"at": [
+						{
+							"file": "src/cli/land-head.ts",
+							"from": 158,
+							"to": 163
+						},
+						{
+							"file": "src/cli/land-head.ts",
+							"from": 200,
+							"to": 208
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 312,
+			"base": "f8612ed4686c0a2a57cefac0d3224e89c013a74e",
+			"head": "123be0b5074d18cbd493f4292358dab9fdce3e5e",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"defects": [
+				{
+					"fix": 627,
+					"what": "Every fixer handback comment quotes the tail of the fixer agent's own output log rather than the gate's failing output, so the PR shows the fixer's chatter instead of why the gate dropped it.",
+					"at": [
+						{
+							"file": "src/cli/land-fixer.ts",
+							"from": 533,
+							"to": 533
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 335,
+			"base": "12f4af006315bbadb882745c77cf2d0ba148f14f",
+			"head": "ac774f2442eba7ef4b528427cbc0956e1426ad8c",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 337,
+			"base": "3c8cdce73b8c8f5315ec529902c3746aaca50502",
+			"head": "71ec112a1fe17544781f654b70e76ac52a93eb70",
+			"size": "S",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 356,
+			"base": "4bc19ccf7b9db47efb5a419ba7b50bbebf19c1af",
+			"head": "0b842d48559baaa44adb835c670d514ced8b4c2a",
+			"size": "S",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"defects": [
+				{
+					"fix": 593,
+					"what": "The fixer prompt requires building and testing before any fixed or requeue while forbidding contact with any host but dependency registries, so a repository whose tests reach outside services can never be requeued and is always handed back.",
+					"at": [
+						{
+							"file": "assets/land-fix.md",
+							"from": 39,
+							"to": 40
+						},
+						{
+							"file": "assets/land-fix.md",
+							"from": 42,
+							"to": 46
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 361,
+			"base": "5f6df528b417b0fb460b4bc8638b14b477b44569",
+			"head": "40daaba35c6136b6b32acbecd7d09f4456e79fd9",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 389,
+			"base": "662954529415620dd596634f0f258a4e1fbe36ef",
+			"head": "388a0e530b7cda4b452f58b4431671a2e9e0576a",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"defects": [
+				{
+					"fix": 627,
+					"what": "When the fixer failed for its own reasons (crash, refused launch, timeout, invalid result), the watcher's handback quoted the tail of the fixer's own job log instead of the gate's failing output, so the comment showed only the wrapper's error and hid why the queue dropped the PR.",
+					"at": [
+						{
+							"file": "src/cli/land-watch-fix.ts",
+							"from": 548,
+							"to": 548
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 392,
+			"base": "e0509fbe219ee09c2816de20a76d2c82e8141b52",
+			"head": "1fb89e12cb269d48a0561eaf83117a4b8e15171e",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 418,
+			"base": "acb8682041c7c3774d715a68ba9ed9f5da25593b",
+			"head": "7e4bdf74e2e8c6f9ddd3ad7c032f7990d6018a22",
+			"size": "XS",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 419,
+			"base": "e4e64f9b9a6ddd5dfcc38d6a476343af1d341bd2",
+			"head": "a6b7dede826608360e8358997bbcf759e7ebb8cd",
+			"size": "S",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 429,
+			"base": "acb8682041c7c3774d715a68ba9ed9f5da25593b",
+			"head": "eaee36a8d4789afbd65159e6154b11b06178f777",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"defects": [
+				{
+					"fix": 624,
+					"what": "The new gate cancellation tests run their phase under `just` (and GNU time), but Release's macOS job runs test/gate.test.ts with only setup-bun, outside the Nix dev shell, so those tests fail there for want of Just.",
+					"at": [
+						{
+							"file": "test/gate.test.ts",
+							"from": 643,
+							"to": 648
+						},
+						{
+							"file": ".github/workflows/release.yml",
+							"from": 133,
+							"to": 138
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 475,
+			"base": "58696bc097754afd7eddf0671655098681a48478",
+			"head": "5563559335f282820decb8ce5e0a41a41f297202",
+			"size": "S",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 491,
+			"base": "5397c573ab026747c640b867099ed09ab84ae2a3",
+			"head": "9770aa588c4f22f8803d647da46906bd8b22c7fa",
+			"size": "S",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": "claude-opus-5-5",
+			"clean": true
+		},
+		{
+			"pull": 492,
+			"base": "ba352ea8595b2ad23468358b244ffb15a4d44918",
+			"head": "37984404b86dfdc0ca62ba811027cf52f8b48e01",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": "claude-opus-5-5",
+			"defects": [
+				{
+					"fix": 503,
+					"what": "agent.ts defines its own private LIMIT regex duplicating the exported one in src/cli/limit.ts, and the copy lacks `free usage exceeded`, so that spent-limit message is not classified as a limit.",
+					"at": [
+						{
+							"file": "src/cli/agent.ts",
+							"from": 94,
+							"to": 104
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 503,
+			"base": "5397c573ab026747c640b867099ed09ab84ae2a3",
+			"head": "b4d17c2305667defd8c508d826d607be504ec977",
+			"size": "XS",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"clean": true
+		},
+		{
+			"pull": 526,
+			"base": "19a2438cd80cf968dddfbf664570a2c8b9a254bf",
+			"head": "07124a927a40408e75bccf207692b7f47bd2a16d",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": null,
+			"defects": [
+				{
+					"fix": 589,
+					"what": "processStart treats only ENOENT as the process being gone, so reading /proc/<pid>/stat for a process that exits mid-read throws ESRCH, which is rethrown instead of returning undefined.",
+					"at": [
+						{
+							"file": "src/cli/gate.ts",
+							"from": 285,
+							"to": 287
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 570,
+			"base": "738bbdecbd0e4482e038a4aac2a0107b815e8985",
+			"head": "ff36d184dbdd4093ed866bfd510592729710d29f",
+			"size": "L",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": "claude-opus-5-5",
+			"defects": [
+				{
+					"fix": 704,
+					"what": "causes() counted every repository PR URL anywhere in a `## Caused by` section as a culprit, and pullRows credited fixedBy from every PR body, including open or closed-unmerged fixes.",
+					"at": [
+						{
+							"file": "src/cli/usage.ts",
+							"from": 395,
+							"to": 399
+						},
+						{
+							"file": "src/cli/usage.ts",
+							"from": 408,
+							"to": 410
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 585,
+			"base": "133ab156f1dfbb9f8295c5287624bef7d58a9d37",
+			"head": "ece891a3bc5d4ed3908cdf3cb7c07d5db4edb04a",
+			"size": "S",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": "claude-opus-5-5",
+			"defects": [
+				{
+					"fix": 629,
+					"what": "A gate inside a Quest scope now runs in a bound sibling scope and forwards signals by spawning a `systemctl kill` helper, which starts in the enclosing Quest scope's cgroup while that scope's owner is signalling it, so the helper can die of the very signal it forwards.",
+					"at": [
+						{
+							"file": "src/cli/supervise.ts",
+							"from": 299,
+							"to": 299
+						},
+						{
+							"file": "src/cli/supervise.ts",
+							"from": 366,
+							"to": 376
+						},
+						{
+							"file": "src/cli/gate.ts",
+							"from": 692,
+							"to": 692
+						}
+					]
+				},
+				{
+					"fix": 685,
+					"what": "After dropping the delegated child cgroup, the `quest gate` and `quest worktree run` help texts still say a gate inside a Quest scope owns its command through a child cgroup and that the scope is delegated.",
+					"at": [
+						{
+							"file": "src/cli/gate.ts",
+							"from": 681,
+							"to": 692
+						},
+						{
+							"file": "src/cli/main.ts",
+							"from": 140,
+							"to": 140
+						},
+						{
+							"file": "src/cli/main.ts",
+							"from": 851,
+							"to": 852
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 655,
+			"base": "93c9c2ef65f074e82094bf5272076db44ac19030",
+			"head": "85b0b490516f494bd65d998ded89c96195306d73",
+			"size": "S",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": "claude-opus-5-5",
+			"defects": [
+				{
+					"fix": 658,
+					"what": "`quest check` now always compares skill stubs against the running binary's skills, but the merge queue runs the base's binary on a PR whose stubs follow the PR's own skills, so any PR changing a skill fails the queue.",
+					"at": [
+						{
+							"file": "src/cli/main.ts",
+							"from": 203,
+							"to": 205
+						},
+						{
+							"file": ".github/workflows/queue-build.yml",
+							"from": 51,
+							"to": 51
+						}
+					]
+				}
+			]
+		},
+		{
+			"pull": 704,
+			"base": "2a0f4663f0d6947be716dff56f2734935fe86221",
+			"head": "c5c1c77d78d571d8a291dd2ab2d8785a53255e73",
+			"size": "M",
+			"tier": "medium",
+			"reason": "the base has no RISK.md to name what is always high or customer-facing, so every change is medium",
+			"writer": "claude-opus-5-5",
+			"defects": [
+				{
+					"fix": 721,
+					"what": "The token-max integration drops each session's `parent`, so a sub-agent in a detached checkout cannot inherit its parent's PR and stays unattributed, and a review's sub-agents get implementing/iterating roles instead of reviewing.",
+					"at": [
+						{
+							"file": "src/cli/usage.ts",
+							"from": 222,
+							"to": 226
+						},
+						{
+							"file": "src/cli/usage.ts",
+							"from": 470,
+							"to": 473
+						},
+						{
+							"file": "src/cli/usage.ts",
+							"from": 481,
+							"to": 486
+						}
+					]
+				}
+			]
+		}
+	]
+}
