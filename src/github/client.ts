@@ -48,8 +48,8 @@ export type ObjectValue = Record<string, unknown>;
 /** Retries of a 5xx or a dropped connection, waiting 1, 2, 4, then 8 seconds unless GitHub says how long. */
 const TRANSIENT_RETRIES = 4;
 const backoff = (failures: number) => 1000 * 2 ** failures;
-/** How far GitHub's clock may run behind ours when looking for what a lost request created. */
-const CLOCK_SKEW = 60_000;
+/** How far GitHub's clock may run behind ours, as when looking for what a lost request created. */
+export const CLOCK_SKEW = 60_000;
 /** Statuses whose response has no body. */
 const NULL_BODY = [204, 205, 304];
 

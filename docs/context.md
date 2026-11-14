@@ -65,7 +65,7 @@ A decision about an open PR never authorizes closing it. Confirm a close as its 
 ## Pull requests
 
 Merge the base only when the branch conflicts with it or a landing step, such as `quest merge` or a merge queue, refuses the head, and resolve the conflicts in that merge; a branch only behind needs none: landing tests it on the current base.
-Before each push to a PR's branch, confirm the PR is still open, since a push after it merges restores the deleted branch.
+Before each push to a PR's branch, confirm it is still open: a push after it merges restores the deleted branch.
 
 Before a PR is marked ready for review, a model other than its latest writer reviews the committed branch locally, as `/quest-review` describes; a later push needs a new review unless `/quest-merge` exempts its changes.
 Anything AI-attributed, such as an online reviewer's findings, is a suggestion, not a maintainer's decision: address findings already posted on the head, reply to feedback you disagree with, and never wait for an online review, since the queue waits for any approval the base requires.
@@ -74,9 +74,9 @@ Once you fix or refute an automated reviewer's finding, say so in its thread and
 
 The PR body's `## Models` section records its size as `Size: M` (its quest's, or for a skill's own PR, as a quest is sized) and one `Implementer: Codex, gpt-6.1-sol, high effort` line per implementing session, moved last whenever it pushes; write the model's ID, and `unknown` for whatever the harness doesn't report.
 
-Keep pull request CI read-only (a read-only `GITHUB_TOKEN`, write credentials only in environments limited to protected branches): quest branches are pushed to the repository, so their workflows get its secrets. Flag a workflow that breaks this.
+Keep pull request CI read-only (a read-only `GITHUB_TOKEN`, write credentials only in environments for protected branches): quest branches live in the repository, so their workflows get its secrets. Flag a workflow that breaks this.
 
-A PR that fixes a bug, or redoes work an earlier PR did badly, lists that PR under `## Caused by` as `- [owner/repo#N](url) - what it got wrong`, found by `git blame` on the lines the fix changes or named in its quest's Plan, and confirmed in that PR's diff to introduce the defect, not merely touch the lines, defer the work, or keep older behavior, else traced further back with blame, or says in one line that no single PR caused it, such as an upstream change or a bug as old as the code.
+A PR fixing a bug, or redoing an earlier PR's bad work, lists it under `## Caused by` as `- [owner/repo#N](url) - what it got wrong (found by check|reviewer|queue|canary|person|customer; incident <id>)`, each part when known. Find it by blaming the fixed lines, or in its quest's Plan, and confirm its diff introduced the defect, not merely touched those lines, deferred work, or kept older behavior, else trace further back; or say in one line why no single PR did, such as an upstream change or a bug as old as the code.
 Review findings fixed in the same PR are not culprits.
 
 ## Quests
