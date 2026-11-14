@@ -34,11 +34,6 @@ Agent's choices, for the implementer to revisit:
 - Report recall by tier and size, so a reviewer effort can be cut where it
   finds nothing more.
 
-## Required
-
-- [Record what each merged PR broke](/quest/m0/benchmark/breakage.md) - the
-  culprits with their cause and how they were found
-
 ## Related
 
 - [Model check](/quest/m1/model-check.md) - retunes the reviewer table

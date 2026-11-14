@@ -247,6 +247,8 @@ test.each([
 	const stop = {
 		hook_event_name: event,
 		cwd,
+		session_id: "s1",
+		transcript_path: transcript,
 		[key]: transcript,
 		stop_hook_active: true,
 		background_tasks: [
@@ -257,16 +259,18 @@ test.each([
 			{ id: "a1", type: "subagent", status: "running", description: "review" },
 		],
 	};
-	const output = JSON.parse(hook(stop));
+	// A user's own state, so a sender's failure on this host is never said here; this checkout has no origin.
+	const deps = { env: { XDG_STATE_HOME: tempDir(), XDG_CONFIG_HOME: tempDir() } };
+	const output = JSON.parse(hook(stop, deps));
 	expect(output.decision).toBe("block");
 	expect(output.reason).toContain("- cd repo && quest gate just test");
 	expect(output.reason).not.toContain("just check");
 	// Without a transcript, each running gate counts as the agent's.
-	expect(JSON.parse(hook({ ...stop, [key]: "" })).reason).toContain("just check");
+	expect(JSON.parse(hook({ ...stop, [key]: "" }, deps)).reason).toContain("just check");
 	// It lets the turn end once the gate ends, and outside a repository that uses Quest.
-	expect(hook({ ...stop, background_tasks: stop.background_tasks.slice(1) })).toBe("");
-	expect(hook({ ...stop, cwd: checkout(null) })).toBe("");
-	expect(() => hook({ hook_event_name: event, cwd })).toThrow("background_tasks");
+	expect(hook({ ...stop, background_tasks: stop.background_tasks.slice(1) }, deps)).toBe("");
+	expect(hook({ ...stop, cwd: checkout(null) }, deps)).toBe("");
+	expect(() => hook({ hook_event_name: event, cwd }, deps)).toThrow("background_tasks");
 });
 
 test("hook refuses malformed input and events it does not handle", () => {

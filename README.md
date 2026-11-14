@@ -1579,6 +1579,9 @@ moq-dev/quest, PRs updated and sessions active since 2026-11-06; costs (~$) esti
      implementing  local  claude  claude-opus-5-5   low     in 50, cache 36.2k written 1.1M read, out 6.1k, ~$0.63
      reviewing     local  codex   gpt-6.1-sol       medium  in 14.7k, cache 0 written 39.8k read, out 421, ~$0.04
      classifying   local  claude  claude-haiku-5-5  low     in 9.2k, cache 0 written 0 read, out 38, ~$0.00
+  waits: gate-run 4m, pull 12m
+  time: writing 9m (41%), understanding 6m (27%), testing 4m (18%), reporting 3m (14%), idle 2m
+  went wrong (implementing): the first test run failed on a stale build and was rerun after rebuilding
 ```
 
 [token-max](https://github.com/kixel-ai/token-max)'s `sessions` reads and
@@ -1592,17 +1595,14 @@ prompt or reply. Since another repository may use the same branch name, the
 session must also be this repository's, as the repositories token-max resolved
 for it on its own host name, or, once its checkout is deleted, those resolved
 there for another session in that exact directory, as a Codex log records
-(never a parent's, which a nested clone may not share). A sub-agent or
-spawned session that names no PR's branch, as one in a detached checkout,
-takes the PR of the session that spawned it, unless its own repository is
-known to be another; otherwise it stays
-unattributed. A session is classifying when the PR's `## Review` record names
-it as the [risk classifier](#risk-tiers), reviewing when the record names it as
-a reviewer or Codex marks it a review, its parent's role when both are on the
-same PR, so a review's sub-agents count as reviewing, implementing when its
-first request since `--since` came before the PR opened, and iterating
-otherwise, so a session
-that opened a PR before `--since` and kept working on it reads as iterating. Each PR shows its `## Models` size, its risk tier and
+(never a parent's, which a nested clone may not share); otherwise it stays
+unattributed. A session on no such branch, such as a sub-agent in a detached
+checkout, belongs to its parent's PRs unless its own repository is known to be
+another, and a coordinator whose sub-agents worked on several PRs belongs to all
+of them, its cost counting equally toward each, so a PR's sessions add up to its
+whole cost. Each session gets the record
+[`quest records sender`](#session-records) would send, and its role comes from
+it, so a review's sub-agents count as reviewing. Each PR shows its `## Models` size, its risk tier and
 whether a reviewer raised it, and its implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
 `quest review` record names, with its latest round and score and its tally of
 findings across every round, marked `shadow` for the shadow, where a merged PR whose last round left only low
@@ -1653,7 +1653,13 @@ fitting several, such as a routed and a shadow reviewer at one effort whose
 sessions no record names, is split evenly among them and reported as `split`.
 Each risk tier's PRs, how many merged,
 how many a reviewer raised, and how many a later PR's `## Caused by` names
-show whether the tiers predict what breaks. Over the merged
+show whether the tiers predict what breaks. Each breakage a merged PR in the
+window names under `## Caused by` follows on its own line, by culprit, even one
+older than the window, which is read from GitHub: the culprit's tier, size,
+writers, and local reviewers, who found it and the incident it closes when
+the bullet ends with
+`(found by check|reviewer|queue|canary|person|customer; incident <id>)` as the
+rules ask, either part alone allowed, and how long after the culprit merged the fix opened. Over the merged
 PRs come each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
 answers. A hand-back counts only while its draft is open, so a merged PR
@@ -1662,7 +1668,11 @@ Sessions on no PR here, from any
 repository or agent token-max reads, total on an `Unattributed` line. `--pr` and
 `--quest` narrow the report to one PR or one quest's branch, and `--json`
 prints it as one object. Without `token-max` on `PATH`, it says how to install
-it and reports the PRs' records alone.
+it and reports the PRs' records alone. Each PR's `waits:` line sums its
+sessions' waits by kind, a shared session's in its share, and its `time:` line
+their [time splits](#time-splits) the same way, with each note on what went
+wrong; a `Time by role` rollup sums each role's splits, how much of the time a
+checker labeled again it labeled differently, and what labeling took.
 
 `--ssh HOST`, repeatable, also reads that SSH destination's sessions through
 the token-max installed there, matching each through the repositories resolved
@@ -1674,6 +1684,160 @@ token-max could not price, or a transcript line it could not read or that was
 unfinished, is listed under `Lower bounds` with its unreadable lines, and every
 cost it reaches reads `or more`. The land fixer's container keeps no session log, so
 its fixes show without tokens.
+
+### Session records
+
+When an agent session's turn ends in a checkout that uses Quest, `quest`
+sends Kixel Code one record of it, rebuilt each time, so a resend replaces
+the last and the store follows the session as it grows. The store keeps the
+latest upload, since one sender sends a session's uploads in order. The type is
+`SessionRecord`, exported from `quest/core` with `parseRecord` and
+`parseUpload`, which refuse a malformed record whole:
+
+```json
+{"harness":"claude","session":"7ef44bda-fb9b-436f-9ed8-9013d0f38d46","parent":null,"repository":"acme/app","branch":"quest/m0/login","quest":"quest/m0/login.md","pulls":[42],"role":"implementing","models":[{"model":"claude-opus-5-5","effort":"high","input":230,"cacheWrite":211500,"cacheRead":15800000,"output":88800,"cost":6.64,"complete":true}],"cost":6.64,"complete":true,"start":"2026-11-14T00:06:12.270Z","end":"2026-11-14T00:31:40.120Z","waits":[{"kind":"gate-queue","start":"2026-11-14T00:22:07.386Z","end":"2026-11-14T00:22:07.402Z","until":null}],"split":null}
+```
+
+- `pulls` are the PRs it worked on, attributed as `quest usage` attributes
+  them; a session with none yet, such as planning before its PR opens, keeps
+  its `branch`, and the next record names the PR.
+- `role` is classifying when a PR's `## Review` record names it as the
+  [risk classifier](#risk-tiers), reviewing when it names it as a reviewer or
+  Codex marks it a review, else the one the first quest skill it ran gives: planning
+  (`/quest-plan`, `/quest-audit`, `/quest-recurring`, `/quest-import`,
+  `/quest-grill`, `/quest-delete`, `/quest-export`), implementing
+  (`/quest-start`), iterating (`/quest-iterate`), reviewing (`/quest-review`),
+  merging (`/quest-merge`, `/quest-complete`), or coordinating (`/quest-run`,
+  `/quest-spawn`). Without one, a sub-agent takes its parent's role unless that
+  is coordinating; a session on its sub-agents' PRs only is coordinating; one
+  on a `quest-plan/`, `quest-audit/`, `quest-recurring/`, or `quest-import/`
+  branch is planning; and the rest are implementing when their first request
+  came before the PR opened, else iterating.
+- `waits` holds each wait a tool timed: `gate-queue` and `gate-run` for an
+  outermost `quest gate`, `pull` for `quest wait` with the first activity it
+  printed as `until` (null on timeout), `merge-queue` for a `quest wait` that
+  ended on `merged` or `removed_from_merge_queue`, and `person` from a blocking
+  question, such as `AskUserQuestion` or `request_user_input`, to its answer.
+  `quest gate` and `quest wait` log theirs under
+  `$XDG_STATE_HOME/quest/waits` (`~/.local/state`), one file per day kept 90
+  days, whenever `CLAUDE_CODE_SESSION_ID` or `CODEX_THREAD_ID` names the
+  session; a Claude sub-agent's commands carry its parent's ID, so a wait goes
+  to the one sub-agent of it running then in the wait's directory. Waits may
+  overlap, as parallel gates do. `null` means they could not be read, as for a
+  session on another host in `quest usage --ssh`, or one whose transcript has
+  lines token-max could not read either. Like token costs, waits count only
+  those that ended since the window's start.
+- `split` is where the rest of its time went, as the next section describes;
+  null until every step is labeled, and for a session on another host.
+
+The record holds no prompt, reply, or transcript text: skills and questions
+are read from the transcript on this host, and only their names and times
+leave it. The split's notes are lines a model wrote, told to name no one and
+quote no message.
+
+A checkout names its endpoint in a committed `.quest.json`:
+
+```json
+{ "records": "https://kixel.example/records" }
+```
+
+and each user pairs a token with it in `$XDG_CONFIG_HOME/quest/records.json`
+(`~/.config`), so a checkout naming another endpoint, as a hostile branch
+might, is never sent the token or a record:
+
+```json
+{ "https://kixel.example/records": "token" }
+```
+
+The endpoint must be HTTPS, or HTTP to `localhost`. A checkout naming none, or
+an endpoint the user holds no token for, sends nothing, and the hook says so
+once as a system message.
+
+The `Stop` hook [`quest setup`](#configure-your-agent) installs for Claude Code
+and Codex only queues the session under `$XDG_STATE_HOME/quest/records`. One
+sender per user, `quest records sender`, sends the queue each minute at low
+priority, so a busy host's stops never spend its GitHub quota. Its service
+manager runs exactly one, so passes never overlap and a session's uploads reach
+the store in order:
+
+```console
+$ quest records install
+installed and started /home/me/.config/systemd/user/quest-records.service
+```
+
+`quest records install` writes a systemd user service on Linux or a launchd
+agent on macOS running `quest records sender` with the current `PATH`, and
+(re)starts it; rerun it after upgrading `quest`. `quest records uninstall`
+removes it. While no sender runs, stops still queue, and the next stop says so
+once per outage.
+
+Each pass runs token-max on this host from the earliest queued session's first
+instant, reads the PRs updated since then, or since its last upload for that
+endpoint and repository read them, if earlier, so a fix merged after its
+sessions were sent still goes with the next one, labels each session's new
+steps for its [time split](#time-splits), and posts
+`{"records": [...], "breakages": [...]}`, the breakages being those the merged
+PRs among them name under `## Caused by`, as `quest usage` reports them, with
+`Authorization: Bearer <token>`, one upload per endpoint and repository, each
+queued session with its sub-agents, which stop without the hook naming them.
+Each upload is checked with `parseUpload` before it is posted. A 2xx drops the
+sessions from the queue, unless the hook queued one again meanwhile. A 401 or
+403 drops them and sends that endpoint nothing more until the token changes.
+Any other failure keeps them queued, and the next stop says so once. A failing
+endpoint and repository back off, waiting a minute and doubling up to six
+hours, and sit out the passes meanwhile, so they never widen the others'
+window. token-max missing is retried each pass.
+
+A deploy or alert reports what it found with `quest records incident`, which
+posts one breakage at once to the checkout's endpoint and fails loud on any
+answer but a 2xx, since nothing retries it:
+
+```console
+$ quest records incident https://alerts.example/1 --found canary
+reported https://alerts.example/1 open, its culprit unknown
+$ quest records incident https://alerts.example/1 --found canary --pr 42
+reported https://alerts.example/1 against #42
+```
+
+The ID is the reporter's, and a report with the same ID replaces the last. An
+incident stays open, and the store counts open ones apart, until it is
+reported again with `--pr`, or a merged fix names it on its culprit's
+`## Caused by` line, as `(incident https://alerts.example/1)`: the sender then
+sends the fix's breakage under the incident's ID, so it replaces the open one
+as one record holding the culprit, the fix, and the incident. Where several
+fixes name one incident, the one updated last wins. One fix closes several incidents of a
+culprit with a line for each. `--found` is one of `check`, `reviewer`, `queue`,
+`canary`, `person`, or `customer`, and `--at` sets when it was found, as
+an ISO 8601 date and time with a `Z` or offset, by default now. Reverts and red default-branch runs are not reported here: the
+store reads them from GitHub itself.
+
+### Time splits
+
+Before the sender builds a record, a cheap model, Claude Haiku at low effort,
+else Codex's `gpt-6.1-sol` at low, labels each step of the session's
+transcript it has not labeled yet: each tool call or message, with its time
+and a trimmed result, sorted into a fixed list of categories: `understanding`,
+`researching`, `writing`, `testing`, `environment`, `git`, `forge`,
+`reviewing`, `rework`, `coordinating`, `operating`, `reporting`, `circles`
+(going in circles), `waiting`, and `other`. `idle`, the time between turns, is
+measured, never judged. Each stretch of the transcript goes to the step it
+ends at, less the part a timed wait covers, so the categories and the timed
+waits sum to the transcript's span and the categories' tokens to its tokens,
+whatever the model judges. Each part also gets one line on what went wrong,
+if anything did, cut to 300 characters. A reply that is not labels covering
+every step of its part passes the part to the next model. About one part in
+ten is labeled again by a stronger model, Claude Sonnet at medium else
+`gpt-6.1-sol` at medium, and the split reports the time the two labeled
+differently, so the classifier has a known error; a check no model could give
+leaves its part unchecked. The split's `usage` is what labeling took, by model,
+unusable replies included.
+
+The labels are kept under `$XDG_STATE_HOME/quest/records/splits`, so each stop
+labels only the new steps, and `quest usage` reads them without asking a model.
+The transcript text reaches only the labeling model, never the store. Labeling
+never holds a record back: a session no model could label, such as with every
+model logged out, is sent without its split, the next stop says why, and the
+session's next stop labels the steps still unlabeled.
 
 ### Typed messages
 
@@ -2048,7 +2212,9 @@ background commands when it ends, and a session that ends its turn on one
 leaves its result unread. A command is the agent's when its transcript holds
 the ID Claude Code gave it on backgrounding it, so a sibling's gate does not
 hold an agent. Claude Code lists a command only while it runs, so the
-refusal ends with the gate. Codex runs no such hook.
+refusal ends with the gate. Codex runs no such hook. Once the turn can end,
+Claude Code's and Codex's `Stop` hooks queue the session's
+[record](#session-records).
 
 `quest` must be on the `PATH` the agent starts with, as for the worktree `--body`, a `body=` field,
 `git commit -m`, `--body-file -` with a here-document, or a body file. A file

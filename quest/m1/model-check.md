@@ -71,9 +71,7 @@ checkpoints and outages to count by hand:
     on its own chart. The measures are first-round findings per PR
     (`firstRounds.findings` over `firstRounds.pulls`), review rounds per
     reviewed PR (`tally.rounds / reviewed`), hand-backs per PR
-    (`handedBack / pulls`, which counts only drafts still open until
-    [hand-backs on merged PRs](/quest/m0/routing-evidence/handbacks.md)
-    lands), and later
+    (`handedBack / pulls`, merged PRs included), and later
     `## Caused by` escapes per merged PR (`fixes / merged`).
   - Local reviewers, one point per `reviewers` row (PR size, harness,
     model, effort, shadow): cost per PR reviewed, `spent.cost /

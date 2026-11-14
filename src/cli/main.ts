@@ -1,5 +1,6 @@
 // The `quest` command line: argument parsing and output around the core.
 
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
@@ -20,6 +21,8 @@ import {
 	questBranch,
 	RISK_FILE,
 	renderBlocker,
+	FINDERS,
+	type Finder,
 	SIZES,
 	type Size,
 	unblocked,
@@ -56,6 +59,8 @@ import {
 	type Arm,
 	CLASSIFIERS,
 	DEFAULT_SIZE,
+	SPLITTERS,
+	SPLIT_CHECKERS,
 	REVIEWERS,
 	WRITERS,
 	questWriters,
@@ -65,6 +70,7 @@ import {
 	ReviewInputError,
 	ReviewLimitError,
 	processDependencies as reviewDependencies,
+	ask,
 	review,
 	nextStep,
 	roundLines,
@@ -82,6 +88,17 @@ import {
 } from "./hooks";
 import { CHECKED_CONTEXT, USER_ASKED, questRoot } from "./rules";
 import { messageLines, messages } from "./messages";
+import { logWait, pullWaitKind, readWaits } from "./waits";
+import {
+	CHECKOUT_CONFIG,
+	SEND_INTERVAL,
+	background,
+	parseInstant,
+	reportIncident,
+	runSender,
+	tokensPath,
+} from "./send";
+import { installSender, uninstallSender } from "./service";
 import { heal, init, stubFindings, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
@@ -89,7 +106,7 @@ import { type Terminal, Theme } from "./theme";
 import { type Snapshot, checkout, collect, load, snapshot, under } from "./tree";
 import { statusLines } from "./status";
 import { pullRequestStatus } from "../github/status";
-import { TOKEN_MAX_MISSING, daysBefore, usage, usageDependencies, usageLines } from "./usage";
+import { TOKEN_MAX_MISSING, daysBefore, runTokenMax, usage, usageDependencies, usageLines } from "./usage";
 import { waitForActivity, WaitTimeout } from "./wait";
 import { version } from "./version";
 import { Worktrees } from "./worktree";
@@ -167,7 +184,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"With QUEST_GATE_RECORD naming an absolute path, an outermost gate on Linux or macOS appends one JSON " +
 				"line per run to that file, however the run ends: its command, directory, when it started and was " +
 				"admitted, its systemd scope, whose journal holds its CPU time and peak memory, and its exit status. " +
-				"A file it cannot write fails the gate.",
+				"A file it cannot write fails the gate.\n\n" +
+				"In an agent session, where CLAUDE_CODE_SESSION_ID or CODEX_THREAD_ID is set, an outermost gate also logs " +
+				"its time queued and running under $XDG_STATE_HOME/quest/waits for the session's record; a log it cannot " +
+				"write fails the gate.",
 		)
 		.option("--quick", `Start a cheap command after at most ${QUICK_MS / 1000} seconds of waiting`)
 		.argument("<command>", "Executable to run")
@@ -542,22 +562,37 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"On timeout, the only line is a resume point for --since (a cursor, or the given --since or head SHA if setup did not finish), so a retry with it still reports activity from the first wait.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Label changes, replies, and reactions by that account are ignored. " +
 				"Exits 0 for activity, 3 on timeout, 2 for invalid arguments, and 1 for other failures. " +
-				"Issue-comment edits print as edited, including updates to older bot status comments. The account's own edits are ignored.",
+				"Issue-comment edits print as edited, including updates to older bot status comments. The account's own edits are ignored.\n\n" +
+				"In an agent session, where CLAUDE_CODE_SESSION_ID or CODEX_THREAD_ID is set, the wait is logged under " +
+				"$XDG_STATE_HOME/quest/waits for the session's record, named by the first activity's type, or by none on " +
+				"timeout; a log it cannot write exits 1 after printing the activity.",
 		)
 		.argument("<pr>", "GitHub PR URL, or a PR number in origin")
 		.option("--since <point>", "ISO timestamp, branch-tip SHA, or resume cursor (default: current head push time)")
 		.option("--timeout <seconds>", "Maximum wait in seconds", positiveSeconds)
 		.action((value: string, options: { since?: string; timeout?: number }) => {
 			const pr = pullRequest(value, root());
+			const started = new Date().toISOString();
+			// An agent session's wait is logged for its record, named by the first activity, or by none on timeout.
+			const logged = (until: string | null): boolean => {
+				try {
+					logWait({ kind: pullWaitKind(until), start: started, end: new Date().toISOString(), until });
+					return true;
+				} catch (error) {
+					warn(error instanceof Error ? error.message : String(error));
+					return false;
+				}
+			};
 			pending = waitForActivity(pr, options, gitHubDependencies(warn)).then(
 				(lines) => {
 					for (const line of lines) print(line);
-					return 0;
+					return logged(lines[0]?.split(" ")[1] ?? null) ? 0 : 1;
 				},
 				(error: unknown) => {
 					if (error instanceof WaitTimeout && error.cursor) print(error.cursor);
 					warn(error instanceof Error ? error.message : String(error));
-					return error instanceof WaitTimeout ? 3 : error instanceof GitHubInputError ? 2 : 1;
+					if (error instanceof WaitTimeout) return logged(null) ? 3 : 1;
+					return error instanceof GitHubInputError ? 2 : 1;
 				},
 			);
 		});
@@ -1148,11 +1183,19 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.description(
 			"Report origin's PRs updated since --since and the agent sessions active since then on this host and each " +
 				"--ssh host, as token-max sessions exports and prices them, the cost an estimate at each model's API list " +
-				"price; its sub-agents are sessions of their own. Each Claude Code or Codex session belongs to the PR whose " +
-				"head branch it last names, when a repository token-max resolved for it on its own host, or for another " +
-				"session in the same directory there, is this one, else to the PR of the session that spawned it unless its own repository is known to be another; no prompt or reply is read out. Its role is " +
-				"classifying when the PR's ## Review record names it as the risk classifier, reviewing when the record names it as a reviewer or Codex marks it a review, its parent's on the same PR, implementing when its first " +
-				"request since --since came before the PR opened, and iterating otherwise. A session found on several hosts counts once, at its " +
+				"price; its sub-agents are sessions of their own. Each Claude Code or Codex session gets the record quest records " +
+				"sender would send for it. It belongs to the PR whose head branch it last names, when a repository token-max " +
+				"resolved for it on its own host, or for another session in the same directory there, is this one; a session " +
+				"on no such branch belongs to its parent's PRs unless its own repository is known to be another, else, as a coordinator, to every PR its sub-agents worked on, " +
+				"its cost counting equally toward each. Its role is classifying when a PR's ## Review record names it as the risk classifier, reviewing when it names it " +
+				"as a reviewer or Codex marks it a review, else the one the first quest skill it ran gives (planning, implementing, iterating, " +
+				"reviewing, merging, or coordinating), else its parent's unless that is coordinating, else coordinating for a session on its sub-agents' " +
+				"PRs only, planning on a quest-plan, quest-audit, quest-recurring, or quest-import branch, implementing when its " +
+				"first request since --since came before the PR opened, and iterating otherwise. Each PR sums its sessions' " +
+				"waits by kind: queued in and running a quest gate, waiting in quest wait for PR activity or the merge queue, " +
+				"each as the tool logged it for its session, and on a person's answer to a blocking question, as its " +
+				"transcript times it; a session on an --ssh host has no waits read. Skills and questions are read from " +
+				"this host's transcripts, no prompt or reply text read out. A session found on several hosts counts once, at its " +
 				"costliest copy, and the report says how many copies it folded from which hosts; a session with a request " +
 				"token-max could not price or a line it could not read is listed, its cost a lower bound. A host that fails fails the report. " +
 				"Each PR also shows its ## Models size, its risk tier from the ## Review record and whether a reviewer raised it, its implementers, and as unread each Implementer line it cannot read, " +
@@ -1165,7 +1208,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"declines it. Rollups follow: spend by size, role, harness, model, and " +
 				"effort, accuracy by size and implementer, summing each branch's tallies but the shadow's once, where an Implementer line's own size, as (iterate, XS), wins " +
 				"over the PR's, with its writing cost over the merged PRs it was found on, the writer A/B by size and arm, counting a sized PR whose every Implementer line names the same arm, as (arm B), under its first line's writer with the spend of every session on it, local reviewers by size, harness, model, effort, and shadow, with their " +
-				"tallies and reviewing cost per PR, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, and each online reviewer's coverage and findings over the merged PRs. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
+				"tallies and reviewing cost per PR, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, each online reviewer's coverage and findings over the merged PRs, and each breakage a merged PR in the window names under ## Caused by: its culprit's tier, size, writers, and local reviewers, read from GitHub when older than the window, who found it and the incident it closes when the line ends with (found by check|reviewer|queue|canary|person|customer; incident <id>), either part alone allowed, and how long after the culprit merged the fix opened. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
 				"other failures.",
@@ -1194,6 +1237,120 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 					else for (const line of usageLines(report)) print(line);
 				},
 			);
+		});
+
+	const recordsCommand = program
+		.command("records")
+		.summary("Send agent sessions' records to the Kixel Code endpoint their checkout names");
+	recordsCommand
+		.command("sender")
+		.summary("Run the user's record sender until stopped, as its service does")
+		.description(
+			"Send each session record the stop hook queued, with the records of its sub-agents on this host, to the " +
+				`endpoint its checkout's ${CHECKOUT_CONFIG} names as records, posting {"records": [...], "breakages": [...]}, the breakages the merged PRs among them name under ## Caused by, with the token ` +
+				`${tokensPath()} pairs with that endpoint as a bearer token, one upload per endpoint and repository, ` +
+				`then again every ${SEND_INTERVAL / 1000} seconds until stopped, at low priority. A record is built as quest usage ` +
+				"builds it, from token-max's sessions on this host since the earliest queued session's first instant and " +
+				"the PRs updated since then, and replaces its earlier copy, so a resend never doubles. An endpoint that " +
+				"refuses the token (401 or 403) is sent nothing more until the token changes; any other failure keeps the " +
+				"sessions queued, retried after a minute and then twice as long each time up to six hours, and the next " +
+				"stop hook says so once. Before a record is built, a cheap model, " +
+				`${SPLITTERS.map((e) => `${e.harness} ${e.model} ${e.effort}`).join(", then ")}, labels each step of its session's ` +
+				"transcript not labeled yet with a category of work, and about one part in ten is labeled again by " +
+				`${SPLIT_CHECKERS.map((e) => `${e.harness} ${e.model} ${e.effort}`).join(", then ")}; the record's split sums each ` +
+				"category's time, less its timed waits, and tokens, with a line on what went wrong. Only the categories and " +
+				"notes leave the host. A session no model could label is sent without its split, and the next stop says why. " +
+				"Exactly one sender runs per user, " +
+				"as the service quest records install sets up; start no other.\n\nUses GH_TOKEN, GITHUB_TOKEN, or gh auth token.",
+		)
+		.action(() => {
+			background();
+			settle(
+				runSender(
+					{
+						env: process.env,
+						github: () => gitHubDependencies(warn),
+						sessions: (since) => runTokenMax(since, []),
+						waits: (since) => readWaits(since),
+						ask,
+						fetch: globalThis.fetch,
+						sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+						now: Date.now,
+						interval: SEND_INTERVAL,
+					},
+					(line) => print(`${new Date().toISOString()} ${line}`),
+				),
+				() => 1,
+			);
+		});
+	recordsCommand
+		.command("incident")
+		.summary("Report a breakage a deploy or alert found, open until its culprit is named")
+		.argument(
+			"<id>",
+			"A stable ID for the incident, such as the alert's URL; a later report with it replaces this one",
+		)
+		.description(
+			"Post one breakage to the endpoint this checkout's " +
+				`${CHECKOUT_CONFIG} names, with the token ${tokensPath()} pairs with it, as {"records": [], "breakages": [...]}. ` +
+				"Without --pr the incident is open, its culprit unknown; report the same ID again with --pr to close it on " +
+				"its culprit, whose tier, size, writers, and local reviewers are read from its PR body, or name it on the " +
+				"culprit's ## Caused by line of the fix, as (incident <id>), whose record then replaces it. It posts at once " +
+				"and retries nothing, for a deploy or alert to call.\n\nUses GH_TOKEN, GITHUB_TOKEN, or gh auth token. " +
+				"Exits 0 when the endpoint took it, 2 for invalid arguments, and 1 for other failures, refusal included.",
+		)
+		.addOption(new Option("--found <by>", "Who or what found it").choices(FINDERS).makeOptionMandatory())
+		.option("--pr <number>", "The PR that caused it", positiveInteger("--pr"))
+		.option("--at <instant>", "When it was found, as an ISO 8601 date and time with a Z or offset (default: now)")
+		.action((id: string, options: { found: Finder; pr?: number; at?: string }) => {
+			if (/[\r\n]/.test(id) || id.trim() === "")
+				throw new UsageError("the incident ID must be one non-empty line");
+			const at = options.at === undefined ? Date.now() : parseInstant(options.at);
+			if (at === null)
+				throw new UsageError(
+					`--at ${options.at} is not an ISO 8601 date and time with a Z or offset, on a real calendar day`,
+				);
+			settle(
+				reportIncident(
+					{ cwd: root(), id, found: options.found, pull: options.pr ?? null, at },
+					{ env: process.env, github: () => gitHubDependencies(warn), fetch: globalThis.fetch },
+				),
+				(breakage) =>
+					print(
+						`reported ${breakage.incident} ${breakage.culprit ? `against #${breakage.culprit.number}` : "open, its culprit unknown"}`,
+					),
+			);
+		});
+	const serviceDeps = () => ({
+		platform: process.platform,
+		env: process.env,
+		uid: process.getuid?.() ?? 0,
+		run: (command: string, args: string[]) => {
+			execFileSync(command, args, { stdio: ["ignore", "inherit", "inherit"] });
+		},
+		tryRun: (command: string, args: string[]) => {
+			spawnSync(command, args, { stdio: "ignore" });
+		},
+	});
+	recordsCommand
+		.command("install")
+		.summary("Install and start the record sender as a systemd user service or a launchd agent")
+		.description(
+			"Write the record sender's service, a systemd user service on Linux or a launchd agent on macOS running " +
+				"quest records sender with this shell's PATH, and (re)start it, so exactly one sender drains this user's " +
+				"queue. Rerun it after upgrading quest. On Linux, a user service stops at logout unless " +
+				"`loginctl enable-linger` keeps it; the queue holds records meanwhile.",
+		)
+		.action(() => {
+			print(`installed and started ${installSender(serviceDeps())}`);
+		});
+	recordsCommand
+		.command("uninstall")
+		.summary("Stop the record sender and remove its service")
+		.description("Stop the record sender and remove its service; queued records stay until a sender runs again.")
+		.action(() => {
+			const path = uninstallSender(serviceDeps());
+			print(path ? `removed ${path}` : "no record sender service is installed");
 		});
 
 	program
@@ -1630,7 +1787,10 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"whose body lacks a `(Written by ...)` line, or a file written under /tmp. A force-push or rebase the " +
 				`user asked for passes with the \`${USER_ASKED}\` prefix. Stop and SubagentStop refuse to end the ` +
 				"turn, naming each command, while a `quest gate` command the ending agent started runs in Claude " +
-				"Code's background: one whose background ID its transcript holds. Exits 1 on malformed input or an event it " +
+				"Code's background: one whose background ID its transcript holds. Otherwise Claude Code's and Codex's Stop " +
+				`queue the session's record for the endpoint the checkout's ${CHECKOUT_CONFIG} names, for quest records ` +
+				"sender to send; a checkout naming none, an endpoint the user holds no token for, or a host whose sender " +
+				"does not run says so once as a system message, as does a sender's failure. Exits 1 on malformed input or an event it " +
 				"does not handle.",
 		)
 		.action(() => {
