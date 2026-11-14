@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
 import { REFERENCE_LINE, parseUpload } from "../src/core";
 import { hook } from "../src/cli/hooks";
-import { type SendDependencies, queue, sendQueued, tokensPath } from "../src/cli/send";
+import { type SendDependencies, queue, runSender, sendPass, tokensPath } from "../src/cli/send";
 import type { Session } from "../src/cli/usage";
 import { tempDir } from "./fixture";
 
@@ -22,9 +22,11 @@ function checkout(endpoint?: unknown): string {
 	return dir;
 }
 
-/** A user's state and config, with a token for `ENDPOINT` unless told otherwise. */
+/** A user's state and config, with a token for `ENDPOINT` unless told otherwise, and a sender running. */
 function home(token: string | null = "secret"): NodeJS.ProcessEnv {
 	const env = { XDG_STATE_HOME: tempDir(), XDG_CONFIG_HOME: tempDir() };
+	mkdirSync(join(env.XDG_STATE_HOME, "quest", "records"), { recursive: true });
+	writeFileSync(senderPid(env), String(process.pid));
 	if (token !== null) {
 		mkdirSync(join(env.XDG_CONFIG_HOME, "quest"));
 		writeFileSync(tokensPath(env), JSON.stringify({ [ENDPOINT]: token }));
@@ -38,6 +40,8 @@ function transcript(): string {
 	return path;
 }
 
+const senderPid = (env: NodeJS.ProcessEnv) => join(env.XDG_STATE_HOME!, "quest", "records", "sender.pid");
+
 const stopped = (cwd: string) => ({ harness: "claude", session: "s1", transcript: transcript(), cwd });
 
 test("a checkout naming no endpoint, or one without the user's token, queues nothing and says so once", () => {
@@ -45,14 +49,14 @@ test("a checkout naming no endpoint, or one without the user's token, queues not
 	const bare = checkout();
 	expect(queue(stopped(bare), env)).toEqual({
 		notices: [expect.stringContaining("acme/proj names no Kixel Code endpoint in .quest.json")],
-		send: false,
+		queued: false,
 	});
-	expect(queue(stopped(bare), env)).toEqual({ notices: [], send: false });
+	expect(queue(stopped(bare), env)).toEqual({ notices: [], queued: false });
 	const named = checkout(ENDPOINT);
 	expect(queue(stopped(named), env).notices).toEqual([expect.stringContaining(`holds no token for ${ENDPOINT}`)]);
 	expect(queue(stopped(named), env).notices).toEqual([]);
 	// Outside a checkout that uses Quest, nothing is said.
-	expect(queue(stopped(tempDir()), env)).toEqual({ notices: [], send: false });
+	expect(queue(stopped(tempDir()), env)).toEqual({ notices: [], queued: false });
 });
 
 test("a checkout's endpoint must be HTTPS, or HTTP to this host", () => {
@@ -87,14 +91,13 @@ const session = (id: string, branch: string, extra: Partial<Session> = {}): Sess
 /** Sender dependencies whose endpoint answers `status`, recording each upload and token-max's window. */
 function sender(
 	env: NodeJS.ProcessEnv,
-	status: number,
+	status: number | (() => number),
 	sessions: Session[] | null,
-	interval = 0,
 	during: () => void = () => {},
 ) {
 	const uploads: { token: string; body: unknown }[] = [];
 	const windows: Date[] = [];
-	const clock = { now: Date.parse("2026-11-06T12:00:00Z"), slept: [] as number[] };
+	const slept: number[] = [];
 	const json = (value: unknown) =>
 		new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
 	const github = async (input: string | URL | Request) => {
@@ -140,12 +143,10 @@ function sender(
 			return sessions;
 		},
 		waits: () => [],
-		now: () => clock.now,
 		sleep: async (ms) => {
-			clock.slept.push(ms);
-			clock.now += ms;
+			slept.push(ms);
 		},
-		interval,
+		interval: 60_000,
 		fetch: (async (input: string | URL | Request, init?: RequestInit) => {
 			expect(String(input)).toBe(ENDPOINT);
 			uploads.push({
@@ -153,10 +154,10 @@ function sender(
 				body: JSON.parse(String(init?.body)),
 			});
 			during();
-			return new Response("", { status });
+			return new Response("", { status: typeof status === "number" ? status : status() });
 		}) as typeof fetch,
 	};
-	return { deps, uploads, windows, clock };
+	return { deps, uploads, windows, slept };
 }
 
 const pending = (env: NodeJS.ProcessEnv) => readdirSync(join(env.XDG_STATE_HOME!, "quest", "records", "pending"));
@@ -164,16 +165,14 @@ const pending = (env: NodeJS.ProcessEnv) => readdirSync(join(env.XDG_STATE_HOME!
 test("the sender posts each queued session with its sub-agents, from its transcript's start", async () => {
 	const env = home();
 	const root = checkout(ENDPOINT);
-	expect(queue(stopped(root), env)).toEqual({ notices: [], send: true });
+	expect(queue(stopped(root), env)).toEqual({ notices: [], queued: true });
 	const sessions = [
 		session("s1", "quest/m0/a"),
 		session("sub", "quest/m0/a", { parent: "s1" }),
 		session("other", "quest/m0/a"),
 	];
 	const { deps, uploads, windows } = sender(env, 200, sessions);
-	expect(await sendQueued(deps)).toEqual([
-		{ endpoint: ENDPOINT, repository: "acme/proj", records: 2, refused: false },
-	]);
+	expect(await sendPass(deps)).toEqual([{ endpoint: ENDPOINT, repository: "acme/proj", records: 2, refused: false }]);
 	expect(windows).toEqual([new Date("2026-11-06T10:00:00Z")]);
 	expect(uploads).toHaveLength(1);
 	expect(uploads[0]!.token).toBe("Bearer secret");
@@ -190,61 +189,47 @@ test("a failed upload stays queued and is said once; a refused token stops sendi
 	const root = checkout(ENDPOINT);
 	queue(stopped(root), env);
 	const failing = sender(env, 500, [session("s1", "quest/m0/a")]);
-	await expect(sendQueued(failing.deps)).rejects.toThrow("answered 500");
+	await expect(sendPass(failing.deps)).rejects.toThrow("answered 500");
 	expect(pending(env)).toHaveLength(1);
 	const again = queue(stopped(root), env);
 	expect(again.notices).toEqual([expect.stringContaining("answered 500")]);
 	expect(queue(stopped(root), env).notices).toEqual([]);
 
 	const refusing = sender(env, 403, [session("s1", "quest/m0/a")]);
-	expect(await sendQueued(refusing.deps)).toEqual([
+	expect(await sendPass(refusing.deps)).toEqual([
 		{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, refused: true },
 	]);
 	expect(pending(env)).toEqual([]);
 	expect(queue(stopped(root), env)).toEqual({
 		notices: [expect.stringContaining("refused this host's token (403)")],
-		send: false,
+		queued: false,
 	});
 	// A new token is tried again.
 	writeFileSync(tokensPath(env), JSON.stringify({ [ENDPOINT]: "fresh" }));
-	expect(queue(stopped(root), env).send).toBe(true);
+	expect(queue(stopped(root), env).queued).toBe(true);
 });
 
 test("the sender fails loud without token-max or a session it was queued for, keeping the queue", async () => {
 	const env = home();
 	queue(stopped(checkout(ENDPOINT)), env);
-	await expect(sendQueued(sender(env, 200, null).deps)).rejects.toThrow("token-max is not installed");
-	await expect(sendQueued(sender(env, 200, [session("x", "quest/m0/a")]).deps)).rejects.toThrow(
+	await expect(sendPass(sender(env, 200, null).deps)).rejects.toThrow("token-max is not installed");
+	await expect(sendPass(sender(env, 200, [session("x", "quest/m0/a")]).deps)).rejects.toThrow(
 		"lists no claude session s1",
 	);
 	expect(pending(env)).toHaveLength(1);
 });
 
-test("a second sender leaves the queue to the one running", async () => {
-	const env = home();
-	const dir = join(env.XDG_STATE_HOME!, "quest", "records");
-	mkdirSync(dir, { recursive: true });
-	writeFileSync(join(dir, "send.lock"), String(process.pid));
-	expect(await sendQueued(sender(env, 200, []).deps)).toBeNull();
-	expect(existsSync(join(dir, "send.again"))).toBe(true);
-	// A lock whose sender died is taken over.
-	writeFileSync(join(dir, "send.lock"), "999999999");
-	expect(await sendQueued(sender(env, 200, []).deps)).toEqual([]);
-});
-
-test("Claude Code's and Codex's Stop queue the session and start a sender", () => {
+test("Claude Code's and Codex's Stop queue the session", () => {
 	const env = home();
 	const cwd = checkout(ENDPOINT);
-	const started: NodeJS.ProcessEnv[] = [];
-	const deps = { env, send: (e: NodeJS.ProcessEnv) => started.push(e) };
+	const deps = { env };
 	const base = { hook_event_name: "Stop", cwd, session_id: "c1", transcript_path: transcript() };
 	expect(hook({ ...base, background_tasks: [] }, deps)).toBe("");
 	expect(hook({ ...base, session_id: "x1", turn_id: "t1" }, deps)).toBe("");
-	expect(started).toHaveLength(2);
 	expect(pending(env)).toHaveLength(2);
 	// A sub-agent goes with its parent, so its stop queues nothing.
 	expect(hook({ ...base, hook_event_name: "SubagentStop", background_tasks: [] }, deps)).toBe("");
-	expect(started).toHaveLength(2);
+	expect(pending(env)).toHaveLength(2);
 	// What it cannot queue, it says instead of failing the hook.
 	writeFileSync(join(cwd, ".quest.json"), "{");
 	expect(JSON.parse(hook({ ...base, background_tasks: [] }, deps)).systemMessage).toContain(
@@ -253,32 +238,58 @@ test("Claude Code's and Codex's Stop queue the session and start a sender", () =
 	expect(() => hook({ hook_event_name: "Stop", cwd, turn_id: "t1" }, deps)).toThrow("session_id");
 });
 
-test("a background sender's passes start an interval apart, across senders", async () => {
+test("the sender passes every interval, records its PID, and outlives a failed pass", async () => {
 	const env = home();
+	writeFileSync(senderPid(env), "");
 	const root = checkout(ENDPOINT);
 	queue(stopped(root), env);
-	const first = sender(env, 200, [session("s1", "quest/m0/a")], 60_000);
-	await sendQueued(first.deps);
-	expect(first.clock.slept).toEqual([]);
-	queue(stopped(root), env);
-	const second = sender(env, 200, [session("s1", "quest/m0/a")], 60_000);
-	second.clock.now = first.clock.now + 15_000;
-	await sendQueued(second.deps);
-	expect(second.clock.slept).toEqual([45_000]);
-	expect(second.uploads).toHaveLength(1);
+	let status = 500;
+	const { deps, uploads, slept } = sender(env, () => status, [session("s1", "quest/m0/a")]);
+	const log: string[] = [];
+	deps.sleep = async (ms) => {
+		slept.push(ms);
+		status = 200;
+		if (slept.length === 3) throw new Error("stopped");
+	};
+	await expect(runSender(deps, (line) => log.push(line))).rejects.toThrow("stopped");
+	expect(readFileSync(senderPid(env), "utf8")).toBe(String(process.pid));
+	expect(slept).toEqual([60_000, 60_000, 60_000]);
+	// The failed pass keeps the session; the next sends it, and the last finds the queue empty.
+	expect(uploads).toHaveLength(2);
+	expect(log).toEqual([expect.stringContaining("answered 500"), `sent 1 records of acme/proj to ${ENDPOINT}`]);
+	expect(pending(env)).toEqual([]);
+});
+
+test("a stop with no sender running queues the session and says so once per outage", () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	writeFileSync(senderPid(env), "999999999");
+	const down = queue(stopped(root), env);
+	expect(down).toEqual({
+		notices: [expect.stringContaining("no session record sender runs on this host")],
+		queued: true,
+	});
+	expect(down.notices[0]).toContain("quest records install");
+	expect(queue(stopped(root), env)).toEqual({ notices: [], queued: true });
+	expect(pending(env)).toHaveLength(2);
+	// A sender that ran again and stopped is a new outage.
+	writeFileSync(senderPid(env), "999999998");
+	expect(queue(stopped(root), env).notices).toHaveLength(1);
+	writeFileSync(senderPid(env), String(process.pid));
+	expect(queue(stopped(root), env).notices).toEqual([]);
 });
 
 test("a stop queued while its earlier record uploads stays queued", async () => {
 	const env = home();
 	const root = checkout(ENDPOINT);
 	queue(stopped(root), env);
-	const first = sender(env, 200, [session("s1", "quest/m0/a")], 0, () => {
+	const first = sender(env, 200, [session("s1", "quest/m0/a")], () => {
 		if (first.uploads.length === 1) queue(stopped(root), env);
 	});
-	await sendQueued(first.deps);
+	await sendPass(first.deps);
 	expect(pending(env)).toHaveLength(1);
 	const next = sender(env, 200, [session("s1", "quest/m0/a")]);
-	await sendQueued(next.deps);
+	await sendPass(next.deps);
 	expect(next.uploads).toHaveLength(1);
 	expect(pending(env)).toEqual([]);
 });
@@ -292,10 +303,10 @@ test("a queued session for an endpoint that refused its token is dropped unsent"
 	const dir = join(env.XDG_STATE_HOME!, "quest", "records", "pending");
 	const [name] = readdirSync(dir);
 	const copy = readFileSync(join(dir, name!), "utf8");
-	await sendQueued(refusing.deps);
+	await sendPass(refusing.deps);
 	writeFileSync(join(dir, name!), copy);
 	const later = sender(env, 200, [session("s1", "quest/m0/a")]);
-	await sendQueued(later.deps);
+	await sendPass(later.deps);
 	expect(later.uploads).toEqual([]);
 	expect(pending(env)).toEqual([]);
 });

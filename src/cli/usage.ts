@@ -12,7 +12,7 @@ import { MERGER } from "./land-watch-fix";
 import { githubRepository, requireRemote } from "./github";
 import { type GitHub, type ObjectValue, type Repository, link } from "../github/client";
 import { type OnlineReview, readOnlineReviews } from "../github/online-review";
-import { type Counts, type ReviewSummary, findingsText, parseReview } from "./review-record";
+import { type Counts, type ReviewSummary, findingsText, parseReview, reviewSessions } from "./review-record";
 import { SEVERITIES } from "./review";
 import { ROLES, type Role, type SessionRecord, WAIT_KINDS } from "../core";
 import { buildRecords } from "./records";
@@ -493,9 +493,9 @@ export interface RecordSources {
 /** Each session's record, attributed to the PRs in the window, whose review records name their reviewers. */
 export function sessionRecords(sources: RecordSources): Map<Session, SessionRecord> {
 	const { repository, sessions, evidence, pulls, waits, emit, since } = sources;
-	const reviewers = new Set(
-		pulls.flatMap((pull) => parseReview(pull.body).flatMap((review) => review.session ?? [])),
-	);
+	// Only the reviewer sessions are read, so no PR author can stop every session's record with a body this version
+	// cannot parse.
+	const reviewers = new Set(pulls.flatMap((pull) => reviewSessions(pull.body)));
 	return buildRecords({
 		repository,
 		sessions,

@@ -14,7 +14,7 @@ import { type StopInput, broken, questRoot, runningGates, usesQuest } from "./ru
 import { stubFindings } from "./setup";
 import { CONTEXT } from "./skills";
 import { HOOK_EVENTS } from "./worktree-hook";
-import { queue, startSender } from "./send";
+import { queue } from "./send";
 
 /** The command the rule hooks run. */
 export const HOOK_COMMAND = "quest hook";
@@ -282,11 +282,9 @@ interface HookInput {
 	turn_id?: string;
 }
 
-/** What `hook` reads and starts beyond its input. */
+/** What `hook` reads beyond its input. */
 export interface HookDependencies {
 	env: NodeJS.ProcessEnv;
-	/** Start a background sender for the records queued. */
-	send(env: NodeJS.ProcessEnv): void;
 }
 
 /** What a Stop or SubagentStop refusal tells the agent, after the gates it names. */
@@ -302,7 +300,7 @@ const BLOCK_ON_GATES =
  * rule as the reason. Stop and SubagentStop refuse to end the turn while a gate
  * the agent started runs in the background (see `runningGates`).
  */
-export function hook(input: unknown, deps: HookDependencies = { env: process.env, send: startSender }): string {
+export function hook(input: unknown, deps: HookDependencies = { env: process.env }): string {
 	const value = input as Partial<HookInput> | null;
 	if (typeof value?.hook_event_name !== "string" || typeof value.cwd !== "string")
 		throw new Error("expected a Claude Code hook's JSON input with hook_event_name and cwd");
@@ -363,20 +361,18 @@ export function hook(input: unknown, deps: HookDependencies = { env: process.env
 }
 
 /**
- * Queue the record of the session whose turn ended, and start a sender when one is queued. A Claude Code sub-agent
- * is sent with its parent. Says what the person has not seen yet: why nothing is sent, or a sender's failure.
+ * Queue the record of the session whose turn ended for the user's sender. A Claude Code sub-agent is sent with its
+ * parent. Says what the person has not seen yet: why nothing is sent, that no sender runs, or a sender's failure.
  */
 function stopped(value: Partial<HookInput>, harness: string, deps: HookDependencies): string {
 	if (typeof value.session_id !== "string" || typeof value.transcript_path !== "string")
 		throw new Error(`expected a Stop hook's JSON input with session_id and transcript_path`);
 	let notices: string[];
 	try {
-		const queued = queue(
+		notices = queue(
 			{ harness, session: value.session_id, transcript: value.transcript_path, cwd: value.cwd! },
 			deps.env,
-		);
-		if (queued.send) deps.send(deps.env);
-		notices = queued.notices;
+		).notices;
 	} catch (error) {
 		notices = [
 			`quest: cannot queue this session's record: ${error instanceof Error ? error.message : String(error)}`,

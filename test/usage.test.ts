@@ -7,7 +7,7 @@ import { describe, expect, test } from "vitest";
 import { implementer } from "../src/cli/models-record";
 import { fixes } from "../src/cli/land-fixer";
 import type { Round, Tally } from "../src/cli/review";
-import { parseReview, reviewRecord } from "../src/cli/review-record";
+import { parseReview, reviewRecord, reviewSessions } from "../src/cli/review-record";
 import { type Session, causes, fold, parseSessions, usage, usageLines } from "../src/cli/usage";
 import type { LoggedWait } from "../src/cli/waits";
 import { tempDir } from "./fixture";
@@ -322,6 +322,10 @@ describe("PR records", () => {
 		const settledAll = [tally("codex", 3, { high: 1, medium: 1, low: 2 }, 3, 1), tallies[1]!];
 		expect(reviewRecord(clean, settledAll)).toContain(`- Head: ${"b".repeat(40)}\n`);
 		expect(fixes(body)).toEqual(["codex, gpt-6.1-sol, medium effort"]);
+		// The reviewer sessions read even from a record whose other lines this version cannot parse.
+		const newer = body.replace(/^- Rounds: 3;/m, "- Rounds: 3; first round 1 (medium 1);");
+		expect(() => parseReview(newer)).toThrow("Rounds line is malformed");
+		expect(reviewSessions(newer)).toEqual([THREAD, "thread-2", CLAUDE]);
 	});
 
 	test("a record written before tallies has none, and a Rounds line that does not add up fails", () => {

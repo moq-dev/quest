@@ -1509,7 +1509,7 @@ unattributed. A session on no such branch, such as a sub-agent that never
 switched branches, belongs to its parent's PRs, and a coordinator whose
 sub-agents worked on several PRs belongs to all of them, its cost counting
 equally toward each, so a PR's sessions add up to its whole cost. Each session
-gets the record [`quest records send`](#session-records) would send, and its
+gets the record [`quest records sender`](#session-records) would send, and its
 role comes from it. Each PR shows its `## Models` size and implementers, and as `unread:` each Implementer line it cannot read; each reviewer the
 `quest review` record names, with its latest round and score and its tally of
 findings across every round, marked `shadow` for the shadow, where a merged PR whose last round left only low
@@ -1627,19 +1627,31 @@ an endpoint the user holds no token for, sends nothing, and the hook says so
 once as a system message.
 
 The `Stop` hook [`quest setup`](#configure-your-agent) installs for Claude Code
-and Codex queues the session under `$XDG_STATE_HOME/quest/records` and starts
-`quest records send --background` detached at low priority, its passes a
-minute apart so a busy host's stops never spend its GitHub quota. The sender runs
-token-max on this host from the earliest queued session's first instant,
-reads the PRs updated since then, and posts `{"records": [...]}` with
+and Codex only queues the session under `$XDG_STATE_HOME/quest/records`. One
+sender per user, `quest records sender`, sends the queue each minute at low
+priority, so a busy host's stops never spend its GitHub quota. Its service
+manager runs exactly one, so passes never overlap and a session's uploads reach
+the store in order:
+
+```console
+$ quest records install
+installed and started /home/me/.config/systemd/user/quest-records.service
+```
+
+`quest records install` writes a systemd user service on Linux or a launchd
+agent on macOS running `quest records sender` with the current `PATH`, and
+(re)starts it; rerun it after upgrading `quest`. `quest records uninstall`
+removes it. While no sender runs, stops still queue, and the next stop says so
+once per outage.
+
+Each pass runs token-max on this host from the earliest queued session's first
+instant, reads the PRs updated since then, and posts `{"records": [...]}` with
 `Authorization: Bearer <token>`, one upload per endpoint and repository, each
 queued session with its sub-agents, which stop without the hook naming them.
 A 2xx drops the sessions from the queue, unless the hook queued one again
 meanwhile. A 401 or 403 drops them and sends that endpoint nothing more until
 the token changes. Any other failure, token-max missing included, keeps them
-for the next run, and the next stop says so once. While one sender runs,
-another leaves the queue to it, and it runs again once done. `quest records
-send` runs the same in the foreground.
+for the next pass, and the next stop says so once.
 
 ### Typed messages
 

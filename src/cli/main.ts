@@ -1,5 +1,6 @@
 // The `quest` command line: argument parsing and output around the core.
 
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { relative, resolve, sep } from "node:path";
@@ -71,7 +72,8 @@ import {
 import { CHECKED_CONTEXT, USER_ASKED, questRoot } from "./rules";
 import { messageLines, messages } from "./messages";
 import { logWait, pullWaitKind, readWaits } from "./waits";
-import { CHECKOUT_CONFIG, SEND_INTERVAL, background, sendQueued, tokensPath } from "./send";
+import { CHECKOUT_CONFIG, SEND_INTERVAL, background, runSender, tokensPath } from "./send";
+import { installSender, uninstallSender } from "./service";
 import { heal, init, stubFindings, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
 import { CONTEXT, GUIDE, GUIDE_SECTIONS, SKILLS, guideSections, sectionHeading, skill } from "./skills";
@@ -1130,7 +1132,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 			"Report origin's PRs updated since --since and the agent sessions active since then on this host and each " +
 				"--ssh host, as token-max sessions exports and prices them, the cost an estimate at each model's API list " +
 				"price; its sub-agents are sessions of their own. Each Claude Code or Codex session gets the record quest records " +
-				"send would send for it. It belongs to the PR whose head branch it last names, when a repository token-max " +
+				"sender would send for it. It belongs to the PR whose head branch it last names, when a repository token-max " +
 				"resolved for it on its own host, or for another session in the same directory there, is this one; a session " +
 				"on no such branch belongs to its parent's PRs, else, as a coordinator, to every PR its sub-agents worked on, " +
 				"its cost counting equally toward each. Its role is reviewing when a PR's ## Review record names it or Codex " +
@@ -1188,45 +1190,67 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		.command("records")
 		.summary("Send agent sessions' records to the Kixel Code endpoint their checkout names");
 	recordsCommand
-		.command("send")
-		.summary("Send the session records the stop hook queued")
+		.command("sender")
+		.summary("Run the user's record sender until stopped, as its service does")
 		.description(
 			"Send each session record the stop hook queued, with the records of its sub-agents on this host, to the " +
 				`endpoint its checkout's ${CHECKOUT_CONFIG} names as records, posting {"records": [...]} with the token ` +
-				`${tokensPath()} pairs with that endpoint as a bearer token, one upload per endpoint and repository. A record ` +
-				"is built as quest usage builds it, from token-max's sessions on this host since the earliest queued " +
-				"session's first instant and the PRs updated since then, and replaces its earlier copy, so a resend " +
-				"never doubles. An endpoint that refuses the token (401 or 403) is sent nothing more until the token " +
-				"changes; any other failure keeps the sessions queued for the next run, and the next stop hook says so " +
-				"once. While another sender runs, it leaves the queue to that one. The stop hook runs it detached with " +
-				"--background, at low priority and with its passes a minute apart, so a busy host's stops never spend " +
-				"its GitHub quota.\n\nUses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when sent, 1 on failure or a refused token.",
+				`${tokensPath()} pairs with that endpoint as a bearer token, one upload per endpoint and repository, ` +
+				`then again every ${SEND_INTERVAL / 1000} seconds until stopped, at low priority. A record is built as quest usage ` +
+				"builds it, from token-max's sessions on this host since the earliest queued session's first instant and " +
+				"the PRs updated since then, and replaces its earlier copy, so a resend never doubles. An endpoint that " +
+				"refuses the token (401 or 403) is sent nothing more until the token changes; any other failure keeps the " +
+				"sessions queued for the next pass, and the next stop hook says so once. Exactly one sender runs per user, " +
+				"as the service quest records install sets up; start no other.\n\nUses GH_TOKEN, GITHUB_TOKEN, or gh auth token.",
 		)
-		.option("--background", "Run at low priority, as the stop hook starts it")
-		.action((options: { background?: boolean }) => {
-			if (options.background) background();
+		.action(() => {
+			background();
 			settle(
-				sendQueued({
-					env: process.env,
-					github: () => gitHubDependencies(warn),
-					sessions: (since) => runTokenMax(since, []),
-					waits: (since) => readWaits(since),
-					fetch: globalThis.fetch,
-					now: Date.now,
-					sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
-					interval: options.background ? SEND_INTERVAL : 0,
-				}),
-				(sent) => {
-					if (sent === null) print("another sender is running; it sends the queue");
-					for (const each of sent ?? [])
-						if (each.refused)
-							warn(
-								`${each.endpoint} refused the token for ${each.repository}; ${each.records} records dropped`,
-							);
-						else print(`sent ${each.records} records of ${each.repository} to ${each.endpoint}`);
-					return sent?.some((each) => each.refused) ? 1 : 0;
-				},
+				runSender(
+					{
+						env: process.env,
+						github: () => gitHubDependencies(warn),
+						sessions: (since) => runTokenMax(since, []),
+						waits: (since) => readWaits(since),
+						fetch: globalThis.fetch,
+						sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+						interval: SEND_INTERVAL,
+					},
+					(line) => print(`${new Date().toISOString()} ${line}`),
+				),
+				() => 1,
 			);
+		});
+	const serviceDeps = () => ({
+		platform: process.platform,
+		env: process.env,
+		uid: process.getuid?.() ?? 0,
+		run: (command: string, args: string[]) => {
+			execFileSync(command, args, { stdio: ["ignore", "inherit", "inherit"] });
+		},
+		tryRun: (command: string, args: string[]) => {
+			spawnSync(command, args, { stdio: "ignore" });
+		},
+	});
+	recordsCommand
+		.command("install")
+		.summary("Install and start the record sender as a systemd user service or a launchd agent")
+		.description(
+			"Write the record sender's service, a systemd user service on Linux or a launchd agent on macOS running " +
+				"quest records sender with this shell's PATH, and (re)start it, so exactly one sender drains this user's " +
+				"queue. Rerun it after upgrading quest. On Linux, a user service stops at logout unless " +
+				"`loginctl enable-linger` keeps it; the queue holds records meanwhile.",
+		)
+		.action(() => {
+			print(`installed and started ${installSender(serviceDeps())}`);
+		});
+	recordsCommand
+		.command("uninstall")
+		.summary("Stop the record sender and remove its service")
+		.description("Stop the record sender and remove its service; queued records stay until a sender runs again.")
+		.action(() => {
+			const path = uninstallSender(serviceDeps());
+			print(path ? `removed ${path}` : "no record sender service is installed");
 		});
 
 	program
@@ -1638,9 +1662,9 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				`user asked for passes with the \`${USER_ASKED}\` prefix. Stop and SubagentStop refuse to end the ` +
 				"turn, naming each command, while a `quest gate` command the ending agent started runs in Claude " +
 				"Code's background: one whose background ID its transcript holds. Otherwise Claude Code's and Codex's Stop " +
-				`queue the session's record for the endpoint the checkout's ${CHECKOUT_CONFIG} names and start quest records ` +
-				"send in the background; a checkout naming none, or an endpoint the user holds no token for, says so once " +
-				"as a system message, as does a sender's failure. Exits 1 on malformed input or an event it " +
+				`queue the session's record for the endpoint the checkout's ${CHECKOUT_CONFIG} names, for quest records ` +
+				"sender to send; a checkout naming none, an endpoint the user holds no token for, or a host whose sender " +
+				"does not run says so once as a system message, as does a sender's failure. Exits 1 on malformed input or an event it " +
 				"does not handle.",
 		)
 		.action(() => {

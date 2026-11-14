@@ -1,19 +1,8 @@
-// Sending each session's record to the Kixel Code endpoint its checkout names. The stop hook queues the session and
-// starts a sender in the background; the sender rebuilds each queued session's record, with its sub-agents', and
-// posts them, keeping what failed for the next run. A record replaces its earlier copy, so a resend never doubles.
-import { spawn, spawnSync } from "node:child_process";
-import {
-	closeSync,
-	existsSync,
-	linkSync,
-	mkdirSync,
-	openSync,
-	readdirSync,
-	readFileSync,
-	renameSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+// Sending each session's record to the Kixel Code endpoint its checkout names. The stop hook only queues the session;
+// one sender per user, run by its service manager, rebuilds each queued session's record, with its sub-agents', and
+// posts them, keeping what failed for the next pass. A record replaces its earlier copy, so a resend never doubles.
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, setPriority } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -46,7 +35,7 @@ export interface Pending {
 }
 
 /** Where the sender keeps its queue and what it has said. */
-function stateDirectory(env: NodeJS.ProcessEnv): string {
+export function stateDirectory(env: NodeJS.ProcessEnv): string {
 	return join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "quest", "records");
 }
 
@@ -153,8 +142,8 @@ export interface Stopped {
 export interface Queued {
 	/** Each notice the person has not seen yet. */
 	notices: string[];
-	/** Whether a sender should run. */
-	send: boolean;
+	/** Whether the session was queued. */
+	queued: boolean;
 }
 
 /**
@@ -167,17 +156,17 @@ export function queue(stopped: Stopped, env: NodeJS.ProcessEnv = process.env): Q
 	const failure = unseenFailure(env);
 	if (failure) notices.push(failure);
 	const root = questRoot(stopped.cwd);
-	if (root === null) return { notices, send: false };
+	if (root === null) return { notices, queued: false };
 	const said = (key: string, notice: string) => {
 		const text = once(env, key, notice);
 		if (text) notices.push(text);
-		return { notices, send: false };
+		return { notices, queued: false };
 	};
 	const run = (args: string[]) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8", env: discoveryEnv() });
 	const url = run(["remote", "get-url", "origin"]);
 	const origin = url.status === 0 ? githubRepository(url.stdout.trim()) : null;
 	// A checkout off GitHub has no PRs for a record to name.
-	if (origin === null) return { notices, send: false };
+	if (origin === null) return { notices, queued: false };
 	const repository = `${origin.owner}/${origin.repo}`.toLowerCase();
 	const endpoint = checkoutEndpoint(root);
 	if (endpoint === null)
@@ -191,7 +180,7 @@ export function queue(stopped: Stopped, env: NodeJS.ProcessEnv = process.env): Q
 			`token:${endpoint}`,
 			`quest: ${tokensPath(env)} holds no token for ${endpoint}, so this host sends it no session records.`,
 		);
-	if (existsSync(refusal(env, endpoint, token))) return { notices, send: false };
+	if (existsSync(refusal(env, endpoint, token))) return { notices, queued: false };
 	const dir = join(stateDirectory(env), "pending");
 	const start = transcriptStart(stopped.transcript);
 	if (start === null) throw new Error(`${stopped.transcript} records no instant, so its session cannot be read`);
@@ -211,31 +200,14 @@ export function queue(stopped: Stopped, env: NodeJS.ProcessEnv = process.env): Q
 	const path = join(dir, `${queued}.json`);
 	writeFileSync(`${path}.new`, JSON.stringify(pending));
 	renameSync(`${path}.new`, path);
-	return { notices, send: true };
-}
-
-/**
- * Start `quest records send` detached, at low priority, outside the session's environment, so the session's own
- * waits never include its gate. Its output goes to a log beside the queue.
- */
-export function startSender(env: NodeJS.ProcessEnv = process.env): void {
-	const dir = stateDirectory(env);
-	mkdirSync(dir, { recursive: true, mode: 0o700 });
-	const log = openSync(join(dir, "send.log"), "a", 0o600);
-	try {
-		const clean = { ...env };
-		delete clean.CLAUDE_CODE_SESSION_ID;
-		delete clean.CODEX_THREAD_ID;
-		const child = spawn("quest", ["records", "send", "--background"], {
-			detached: true,
-			stdio: ["ignore", log, log],
-			env: clean,
-		});
-		child.on("error", (error) => writeFailure(env, `cannot start \`quest records send\`: ${error.message}`));
-		child.unref();
-	} finally {
-		closeSync(log);
-	}
+	const sender = senderRuns(env);
+	if (!sender.runs)
+		// Said once per outage: the PID of the sender that stopped names it, or none for a host that never ran one.
+		said(
+			`down:${sender.pid}`,
+			`quest: no session record sender runs on this host, so this session's record waits in ${dir} with any others; start it with \`quest records install\`.`,
+		);
+	return { notices, queued: true };
 }
 
 /** The sender's last failure when the person has not seen it yet, marking it seen. */
@@ -263,13 +235,12 @@ export interface SendDependencies {
 	sessions(since: Date): Session[] | null;
 	waits(since: number): LoggedWait[];
 	fetch: typeof globalThis.fetch;
-	now(): number;
 	sleep(ms: number): Promise<unknown>;
-	/** The least time between the starts of two passes, so a busy host's stops cannot spend its GitHub quota. */
+	/** The time between passes. */
 	interval: number;
 }
 
-/** The least time between a background sender's passes. */
+/** How long the sender waits between passes, so a busy host's stops cannot spend its GitHub quota. */
 export const SEND_INTERVAL = 60_000;
 
 /** The outcome of one upload. */
@@ -281,79 +252,18 @@ export interface Sent {
 	refused: boolean;
 }
 
-/**
- * Send every queued session's record, with those of its sub-agents on this host, one upload per endpoint and
- * repository. A record goes only to the endpoint its token is paired with. An upload refused for access drops its
- * sessions and says so once; any other failure keeps them queued for the next run and throws. A session queued again
- * while an upload ran stays queued. With another sender running, it leaves the queue to that one, which runs again,
- * passes starting at least `interval` apart.
- */
-export async function sendQueued(deps: SendDependencies): Promise<Sent[] | null> {
-	const dir = stateDirectory(deps.env);
-	mkdirSync(join(dir, "pending"), { recursive: true, mode: 0o700 });
-	const lock = join(dir, "send.lock");
-	const again = join(dir, "send.again");
-	const last = join(dir, "send.last");
-	const sent: Sent[] = [];
-	// A sender that asks for another pass just as this one lets go is caught by checking once more after.
-	for (let first = true; first || existsSync(again); first = false) {
-		if (!acquire(lock)) {
-			writeFileSync(again, "");
-			// The holder may have let go and checked for another pass just before the request: take it then.
-			if (!acquire(lock)) return first ? null : sent;
-		}
-		try {
-			do {
-				rmSync(again, { force: true });
-				const previous = existsSync(last) ? Number(readFileSync(last, "utf8")) : 0;
-				const wait = previous + deps.interval - deps.now();
-				if (wait > 0) await deps.sleep(Math.min(wait, deps.interval));
-				writeFileSync(last, String(deps.now()));
-				sent.push(...(await sendOnce(deps, dir)));
-			} while (existsSync(again));
-		} catch (error) {
-			writeFailure(
-				deps.env,
-				`session records were not sent and stay queued for the next run: ${error instanceof Error ? error.message : String(error)}`,
-			);
-			throw error;
-		} finally {
-			rmSync(lock, { force: true });
-		}
-	}
-	return sent;
-}
+/** Where the running sender records its process ID, for the stop hook to check. */
+const pidPath = (env: NodeJS.ProcessEnv) => join(stateDirectory(env), "sender.pid");
 
 /**
- * Take the lock file, or take it over from a sender that died; false while a live one holds it. The lock appears
- * whole, linked from a file already naming this process, so no reader sees it empty. Two senders reclaiming the same
- * dead lock can both run; that only repeats work, since the store keeps the copy of a session that ends latest.
+ * Whether a sender runs: the process the sender's PID file names is alive. A reused PID reads as running, which only
+ * delays the notice; the queue keeps every record meanwhile.
  */
-function acquire(lock: string): boolean {
-	const mine = `${lock}.${process.pid}`;
-	writeFileSync(mine, String(process.pid), { mode: 0o600 });
-	try {
-		for (let tries = 0; tries < 2; tries++) {
-			try {
-				linkSync(mine, lock);
-				return true;
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			}
-			let owner: number;
-			try {
-				owner = Number(readFileSync(lock, "utf8"));
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-				throw error;
-			}
-			if (Number.isSafeInteger(owner) && owner > 0 && alive(owner)) return false;
-			rmSync(lock, { force: true });
-		}
-		return false;
-	} finally {
-		rmSync(mine, { force: true });
-	}
+function senderRuns(env: NodeJS.ProcessEnv): { runs: boolean; pid: string } {
+	const path = pidPath(env);
+	const pid = existsSync(path) ? readFileSync(path, "utf8").trim() : "";
+	const owner = Number(pid);
+	return { runs: Number.isSafeInteger(owner) && owner > 0 && alive(owner), pid };
 }
 
 function alive(pid: number): boolean {
@@ -362,6 +272,49 @@ function alive(pid: number): boolean {
 		return true;
 	} catch (error) {
 		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/**
+ * Run the sender until stopped: each `interval`, send every queued session's record, keeping what failed for the
+ * next pass and leaving the failure for the stop hook to say. The user's service manager runs exactly one, so no two
+ * passes ever overlap and uploads of a session reach the store in order.
+ */
+export async function runSender(deps: SendDependencies, log: (line: string) => void): Promise<never> {
+	const dir = stateDirectory(deps.env);
+	mkdirSync(join(dir, "pending"), { recursive: true, mode: 0o700 });
+	writeFileSync(pidPath(deps.env), String(process.pid));
+	for (;;) {
+		try {
+			for (const each of await sendPass(deps))
+				log(
+					each.refused
+						? `${each.endpoint} refused the token for ${each.repository}; ${each.records} records dropped`
+						: `sent ${each.records} records of ${each.repository} to ${each.endpoint}`,
+				);
+		} catch (error) {
+			log(error instanceof Error ? error.message : String(error));
+		}
+		await deps.sleep(deps.interval);
+	}
+}
+
+/**
+ * Send every queued session's record once, with those of its sub-agents on this host, one upload per endpoint and
+ * repository. A record goes only to the endpoint its token is paired with. An upload refused for access drops its
+ * sessions and says so once; any other failure keeps them queued for the next pass, records it for the stop hook,
+ * and throws. A session queued again while an upload ran stays queued.
+ */
+export async function sendPass(deps: SendDependencies): Promise<Sent[]> {
+	const dir = stateDirectory(deps.env);
+	try {
+		return await sendOnce(deps, dir);
+	} catch (error) {
+		writeFailure(
+			deps.env,
+			`session records were not sent and stay queued for the next pass: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		throw error;
 	}
 }
 
@@ -469,7 +422,7 @@ function settle(q: { path: string }): void {
 	rmSync(q.path, { force: true });
 }
 
-/** Lower this process's priority, as a background sender should run. */
+/** Lower this process's priority, since the sender works in the background. */
 export function background(): void {
 	try {
 		setPriority(19);

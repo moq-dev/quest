@@ -18,13 +18,14 @@ user's token as a bearer token, and takes a 401 or 403 as no access.
 
 - Commit `.quest.json` here first, then in each repository the benchmark
   covers, with the endpoint's final URL.
-- Put the token on each host through kixel-ai/dotfiles, which owns the
+- Put the token on each host, and start its sender with `quest records
+  install`, through kixel-ai/dotfiles, which owns the
   maintainer's host configuration, not by hand.
 
 ## Waiting
 
 - kixel-ai/kixel.quest: its record store serves an endpoint that stores
-  `quest`'s upload with `parseUpload`, keeps each session's copy that ends
-  latest (two senders on a host may rarely overlap), refuses a token it did not issue
+  `quest`'s upload with `parseUpload`, keeps each session's latest upload,
+  refuses a token it did not issue
   with 401 or 403, and it says how a person gets a token; check that its
   `quest/m0/records.md` is gone from its tree

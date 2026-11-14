@@ -1,6 +1,6 @@
 // The record of one agent session that `quest` sends to Kixel Code, which stores exactly this shape, and that
-// `quest usage` prints. One session is one record: a resend under the same harness and session ID replaces it unless
-// it ends earlier than the copy stored, since uploads of one session may arrive out of order.
+// `quest usage` prints. One session is one record: a resend under the same harness and session ID replaces it. A
+// host's one sender uploads a session's copies in order, so the latest upload is the newest copy.
 
 /** What a session did for its PRs. */
 export const ROLES = ["planning", "implementing", "iterating", "reviewing", "merging", "coordinating"] as const;
