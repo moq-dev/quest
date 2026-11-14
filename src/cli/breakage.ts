@@ -15,7 +15,7 @@ export interface Cause {
 /**
  * The PRs of `repository` that `body`'s `## Caused by` section names as culprits: each bullet that opens with
  * `[owner/repo#N](url) - why`. A link anywhere else on a line, as context or a "fixed by" aside, names no culprit.
- * A line ending its why with `(found by a customer)`, or any finder, says who found it; a culprit named twice keeps
+ * A line ending its why with `(found by customer)`, or any finder, an article allowed, says who found it; a culprit named twice keeps
  * its first line.
  */
 export function culprits(body: string, repository: Repository): Cause[] {

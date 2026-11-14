@@ -1654,8 +1654,8 @@ show whether the tiers predict what breaks. Each breakage a merged PR in the
 window names under `## Caused by` follows on its own line, by culprit, even one
 older than the window, which is read from GitHub: the culprit's tier, size,
 writers, and local reviewers, who found it when the bullet ends with
-`(found by a check)`, or a reviewer, the queue, a canary, a person, or a
-customer, and how long after the culprit merged the fix opened. Over the merged
+`(found by check|reviewer|queue|canary|person|customer)` as the rules ask,
+and how long after the culprit merged the fix opened. Over the merged
 PRs come each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
 answers. A hand-back counts only while its draft is open, so a merged PR
