@@ -1762,7 +1762,9 @@ removes it. While no sender runs, stops still queue, and the next stop says so
 once per outage.
 
 Each pass runs token-max on this host from the earliest queued session's first
-instant, reads the PRs updated since then, and posts
+instant, reads the PRs updated since then, or since its last upload for that
+endpoint and repository read them, if earlier, so a fix merged after its
+sessions were sent still goes with the next one, and posts
 `{"records": [...], "breakages": [...]}`, the breakages being those the merged
 PRs among them name under `## Caused by`, as `quest usage` reports them, with
 `Authorization: Bearer <token>`, one upload per endpoint and repository, each

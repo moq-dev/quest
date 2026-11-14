@@ -545,3 +545,51 @@ test("an incident is posted at once, open until reported again with its culprit,
 		reportIncident({ cwd: checkout(), id: "x", found: "person", pull: null, at: 0 }, deps),
 	).rejects.toThrow("names no record endpoint");
 });
+
+test("a fix that merges after its sessions were sent reaches the store with the next session", async () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	queue(stopped(root), env);
+	const fix = (merged: boolean) => ({
+		...CULPRIT,
+		number: 8,
+		head: { ref: "fix/c", repo: { full_name: "acme/proj" } },
+		state: merged ? "closed" : "open",
+		merged_at: merged ? "2026-11-06T12:30:00Z" : null,
+		closed_at: merged ? "2026-11-06T12:30:00Z" : null,
+		created_at: "2026-11-06T10:20:00Z",
+		updated_at: merged ? "2026-11-06T12:30:00Z" : "2026-11-06T10:20:00Z",
+		body: "## Caused by\n\n- [acme/proj#3](https://github.com/acme/proj/pull/3) - lost a frame\n",
+	});
+	const open = sender(env, 200, [session("s1", "quest/m0/a")], () => {}, [fix(false)]);
+	expect((await sendPass(open.deps))[0]).toMatchObject({ records: 1, breakages: 0 });
+	// The next session starts after the fix merged, so its own window alone would miss the fix.
+	writeFileSync(join(root, "later.jsonl"), `{"type":"user","timestamp":"2026-11-06T13:00:00Z"}\n`);
+	queue({ ...stopped(root), session: "s2", transcript: join(root, "later.jsonl") }, env);
+	const later = session("s2", "main", {
+		start: Date.parse("2026-11-06T13:00:00Z"),
+		end: Date.parse("2026-11-06T13:30:00Z"),
+		branches: [
+			{ name: "main", first: Date.parse("2026-11-06T13:00:00Z"), last: Date.parse("2026-11-06T13:30:00Z") },
+		],
+	});
+	const merged = sender(env, 200, [later], () => {}, [fix(true)]);
+	merged.clock.now = Date.parse("2026-11-06T14:00:00Z");
+	await sendPass(merged.deps);
+	expect(parseUpload(merged.uploads[0]!.body).breakages.map((b) => [b.culprit?.number, b.fix])).toEqual([[3, 8]]);
+});
+
+test("an incident reported from a subdirectory as `.`, as with no --root, finds its checkout", async () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	mkdirSync(join(root, "sub"));
+	const { deps } = sender(env, 200, []);
+	const before = process.cwd();
+	process.chdir(join(root, "sub"));
+	try {
+		const reported = await reportIncident({ cwd: ".", id: "x", found: "person", pull: null, at: 0 }, deps);
+		expect(reported.repository).toBe("acme/proj");
+	} finally {
+		process.chdir(before);
+	}
+});

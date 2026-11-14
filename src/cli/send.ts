@@ -4,12 +4,12 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, setPriority } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
 import { type BreakageRecord, type Finder, type RecordUpload, parseUpload } from "../core";
 import { culpritOf } from "./breakage";
-import { type GitHubDependencies, GitHub } from "../github/client";
+import { CLOCK_SKEW, type GitHubDependencies, GitHub } from "../github/client";
 import { baseRepository } from "./claims";
 import { discoveryEnv } from "./git";
 import { readRemote, remoteRepository } from "./github";
@@ -364,7 +364,14 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			}
 			const [owner, repo] = origin.split("/") as [string, string];
 			const repository = await baseRepository(client, { owner, repo }, prefix);
-			const pulls: Pull[] = await updatedPulls(client, repository, since);
+			// PRs are read from the last upload's read, if earlier, so a fix that merged after its sessions were sent,
+			// as through the merge queue, still reaches the store with the next session.
+			const read = deps.now() - CLOCK_SKEW;
+			const pulls: Pull[] = await updatedPulls(
+				client,
+				repository,
+				Math.min(since, readCursor(deps.env, id) ?? since),
+			);
 			const emit = new Set<Session>();
 			const missing: typeof group = [];
 			for (const q of group) {
@@ -457,6 +464,7 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			if (!response.ok)
 				throw new Error(`${endpoint} answered ${response.status}: ${(await response.text()).slice(0, 500)}`);
 			clearBackoff(deps.env, id);
+			writeCursor(deps.env, id, read);
 			for (const q of group) settle(q);
 			sent.push({
 				endpoint,
@@ -500,7 +508,7 @@ export async function reportIncident(
 	incident: Incident,
 	deps: Pick<SendDependencies, "env" | "github" | "fetch">,
 ): Promise<BreakageRecord> {
-	const root = questRoot(incident.cwd);
+	const root = questRoot(resolve(incident.cwd));
 	if (root === null) throw new Error(`${incident.cwd} is not in a checkout that uses Quest`);
 	const endpoint = checkoutEndpoint(root);
 	if (endpoint === null) throw new Error(`${join(root, CHECKOUT_CONFIG)} names no record endpoint`);
@@ -561,6 +569,25 @@ const MAX_BACKOFF = 6 * 3_600_000;
 interface Backoff {
 	failures: number;
 	next: number;
+}
+
+const cursorPath = (env: NodeJS.ProcessEnv, id: string) => join(stateDirectory(env), "read", digest(id));
+
+/** When group `id`'s last successful upload read its PRs, epoch ms, or null; an unreadable file reads as none. */
+function readCursor(env: NodeJS.ProcessEnv, id: string): number | null {
+	try {
+		const at = Number(readFileSync(cursorPath(env, id), "utf8"));
+		return Number.isFinite(at) && at > 0 ? at : null;
+	} catch {
+		return null;
+	}
+}
+
+function writeCursor(env: NodeJS.ProcessEnv, id: string, at: number): void {
+	mkdirSync(join(stateDirectory(env), "read"), { recursive: true, mode: 0o700 });
+	const path = cursorPath(env, id);
+	writeFileSync(`${path}.new`, String(at));
+	renameSync(`${path}.new`, path);
 }
 
 const backoffPath = (env: NodeJS.ProcessEnv, id: string) => join(stateDirectory(env), "backoff", digest(id));
