@@ -1853,11 +1853,11 @@ test("a Models record reads its size and every implementing model", () => {
 		implementers: [
 			{
 				item: "Implementer: Claude Code, claude-opus-5-5, high effort",
-				fields: { harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: null },
+				fields: { harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: null, arm: null },
 			},
 			{
 				item: "Implementer: Codex, unknown, unknown effort",
-				fields: { harness: "Codex", model: "unknown", effort: "unknown", size: null },
+				fields: { harness: "Codex", model: "unknown", effort: "unknown", size: null, arm: null },
 			},
 		],
 	});
@@ -1875,6 +1875,7 @@ test("an Implementer line reads as agents write it", () => {
 		model: "claude-opus-5-5",
 		effort,
 		size: null,
+		arm: null,
 	});
 	expect(read("Claude Code, Opus 5.5, high effort")).toEqual(opus("high"));
 	expect(read("Claude Code, Claude Opus 5.5, xhigh effort")).toEqual(opus("xhigh"));
@@ -1885,21 +1886,31 @@ test("an Implementer line reads as agents write it", () => {
 		model: "claude-haiku-5-5",
 		effort: "low",
 		size: null,
+		arm: null,
 	});
 	expect(read("claude-haiku-5-5, effort not reported")).toEqual({
 		harness: "unknown",
 		model: "claude-haiku-5-5",
 		effort: "unknown",
 		size: null,
+		arm: null,
 	});
 	expect(read("Codex, GPT-6.1 Sol, medium effort (iterate, XS)")).toEqual({
 		harness: "Codex",
 		model: "gpt-6.1-sol",
 		effort: "medium",
 		size: "XS",
+		arm: null,
 	});
 	expect(read("Claude Code, Opus 5.5, low effort (iterate, flow fix)")).toEqual(opus("low"));
-	expect(read("Claude Code, Opus 5.5, high effort (iterate, XS, arm B)")).toEqual({ ...opus("high"), size: "XS" });
+	expect(read("Claude Code, Opus 5.5, high effort (iterate, XS, arm B)")).toEqual({
+		...opus("high"),
+		size: "XS",
+		arm: "B",
+	});
+	expect(read("Claude Code, Opus 5.5, high effort (arm A)")).toEqual({ ...opus("high"), arm: "A" });
+	// Only an arm the A/B runs reads as one.
+	expect(read("Claude Code, Opus 5.5, high effort (arm C)")).toEqual(opus("high"));
 	expect(read("unknown, Opus 5.5, high effort")).toEqual(opus("high", "unknown"));
 	expect(read("Claude Code, Fable 5.2, medium effort")?.model).toBe("claude-fable-5-2");
 	expect(read("Codex, openai/gpt-6.1-sol, high effort")?.model).toBe("gpt-6.1-sol");

@@ -50,7 +50,17 @@ import { watch, type WatchOptions } from "./land-watch";
 import { landed, landingCheck } from "./landed";
 import { type Report, fixHeadings, fixLinks, moveQuest, removeQuest } from "./move";
 import { type ResolveOptions, resolveFile } from "./resolve";
-import { CLASSIFIERS, DEFAULT_SIZE, REVIEWERS, WRITERS, questWriters, writerAt } from "./models";
+import {
+	ARMS,
+	ARM_NAMES,
+	type Arm,
+	CLASSIFIERS,
+	DEFAULT_SIZE,
+	REVIEWERS,
+	WRITERS,
+	questWriters,
+	writerAt,
+} from "./models";
 import {
 	ReviewInputError,
 	ReviewLimitError,
@@ -304,10 +314,12 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"section or a ## Scheduled date after today's local date. Counts exclude structural epic membership " +
 				"but include the quests an epic's ## Required holds back. Other prerequisites may remain for dependents. " +
 				"Invalid trees fail before printing a ranking. Prints a count and path per line; --json prints an " +
-				"ordered array of {path, dependents, hosts, models} objects, where hosts lists the operating systems " +
+				"ordered array of {path, dependents, hosts, arm, models} objects, where hosts lists the operating systems " +
 				"(linux, macos, windows) under the quest's ## Hosts, empty when it runs anywhere, and models ranks the {harness, model, effort} " +
 				"entries that write the quest: its size's list, or the next size's while a Maintainer: item under its " +
-				"## Waiting leaves a decision open (quest models lists them).\n\n" +
+				"## Waiting leaves a decision open (quest models lists them). While the writer A/B runs, arm is A or B for " +
+				"a size that runs one, and null for L or a quest routed up for an open Maintainer: item, and models opens with that arm's entry; the agent that runs it " +
+				"records the arm on its Implementer line.\n\n" +
 				"--unclaimed ranks the fetched upstream default branch's tree instead of the checkout, then drops " +
 				"quests someone holds: a quest branch upstream, or an open PR from that branch in any repository. A " +
 				"branch whose tip is a merged PR's head holds nothing; a closed, unmerged PR's branch still does. A " +
@@ -348,7 +360,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 							JSON.stringify(
 								shown.map((quest) => {
 									const doc = byPath.get(quest.path)!;
-									return { ...quest, hosts: hosts(doc), models: questWriters(doc) };
+									return { ...quest, hosts: hosts(doc), ...questWriters(doc) };
 								}),
 							),
 						);
@@ -1097,15 +1109,31 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"--writer prints the one entry that runs that model on the work instead, for an iterate, which stays " +
 				"on its PR's writer: the size's own entry for the model, else its entry at the nearest size that " +
 				"lists it, the larger on a tie, so an XS iterate on an Opus PR runs Opus at S's effort. A model no " +
-				"list names is an error. Prints harness, model, and effort per line, tab-separated; --json prints an " +
+				"list names is an error. While the writer A/B runs, each armed size's quests split by a hash of their " +
+				"path between arm A, the size's first entry, and arm B: " +
+				Object.entries(ARMS)
+					.map(([size, arms]) => `${size} B ${arms.B.harness} ${arms.B.model} ${arms.B.effort}`)
+					.join("; ") +
+				". --arm prints that arm's entry at the PR's size instead, for an iterate on a PR whose first " +
+				"Implementer line names the arm. Prints harness, model, and effort per line, tab-separated; --json prints an " +
 				"array of {harness, model, effort} objects.",
 		)
 		.addArgument(new Argument("<size>", "The work's size").choices(SIZES))
 		.option("--writer <model>", "Print only the entry that runs this model, the PR's first Implementer")
+		.addOption(
+			new Option("--arm <arm>", "Print only this writer A/B arm's entry, the PR's first Implementer's").choices(
+				ARM_NAMES,
+			),
+		)
 		.option("--json", "Print a JSON array")
-		.action((size: Size, options: { writer?: string; json?: boolean }) => {
+		.action((size: Size, options: { writer?: string; arm?: Arm; json?: boolean }) => {
 			let entries = WRITERS[size];
-			if (options.writer !== undefined) {
+			if (options.arm !== undefined) {
+				if (options.writer !== undefined) throw new UsageError("give --writer or --arm, not both");
+				const arms = ARMS[size];
+				if (!arms) throw new UsageError(`${size} runs no writer arms`);
+				entries = [arms[options.arm]];
+			} else if (options.writer !== undefined) {
 				const entry = writerAt(size, options.writer);
 				if (entry === null) throw new UsageError(`no write list names ${options.writer}`);
 				entries = [entry];
@@ -1136,7 +1164,8 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"review thread it opens or a [P<n>] line in its review body, and its first answer's first word takes or " +
 				"declines it. Rollups follow: spend by size, role, harness, model, and " +
 				"effort, accuracy by size and implementer, summing each branch's tallies but the shadow's once, where an Implementer line's own size, as (iterate, XS), wins " +
-				"over the PR's, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, and each online reviewer's coverage and findings over the merged PRs. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
+				"over the PR's, the writer A/B by size and arm, counting a sized PR whose every Implementer line names the same arm, as (arm B), " +
+				"under its first line's writer with the spend of every session on it, each risk tier's PRs, merged PRs, tiers a reviewer raised, and PRs a later one fixed, and each online reviewer's coverage and findings over the merged PRs. Without token-max on PATH, it says how to install it and reports the PRs' records alone. " +
 				"--json prints the same report as one object.\n\n" +
 				"Uses GH_TOKEN, GITHUB_TOKEN, or gh auth token. Exits 0 when done, 2 for invalid arguments, and 1 for " +
 				"other failures.",
