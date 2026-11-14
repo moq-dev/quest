@@ -974,25 +974,27 @@ carries a workflow change.
 ### Pin bumps
 
 With `--bump`, the watcher keeps the flake input on the watched repository at
-the watched base in every other repository the App is installed on, so every
-push to the base reaches those repositories with no one touching them.
+the watched repository's latest GitHub release in every other repository the
+App is installed on, so every release reaches those repositories with no one
+touching them, and they run only released code. Before the first release it
+bumps nothing.
 Installing the App on a repository enrolls it and uninstalling it stops its
-bumps; there is no list to keep. Each time the base moves, a pass lists every
+bumps; there is no list to keep. Each time the latest release moves, a pass lists every
 installation's repositories, reads each one's `flake.lock` on its default
 branch without cloning it, and keeps those that lock the watched repository
 through exactly one root input as targets; a repository locking it through
 several is reported and skipped. Discovery needs the installations to grant
-`contents: read`. It needs `nix` on `PATH`. Once a pass sees the base at a commit a target does
+`contents: read`. It needs `nix` on `PATH`. Once a pass sees a latest release whose commit a target does
 not pin yet, it opens or updates that target's one `quest-bump` PR as the App:
 
 1. It reads the target's `flake.lock` on its default branch for the one root
    input that locks the watched repository on GitHub; a target already at the
-   commit gets nothing, and an open bump PR there is closed.
+   release's commit gets nothing, and an open bump PR there is closed.
 2. In a fresh shallow checkout, which it refuses when a tracked symlink leaves
    the checkout or dangles, since the tools write through symlinks, it drops a
-   revision from that input's URL in
-   `flake.nix`, so `flake.lock` alone pins it from then on, and locks the input
-   at the commit with `nix flake lock --override-input`.
+   revision or tag from that input's URL in
+   `flake.nix`, so `flake.lock` alone pins it from then on and a later
+   `nix flake update` cannot move it, and locks the input at the release's commit with `nix flake lock --override-input`.
 3. It builds the watched repository's `quest` at that commit with `nix build`,
    and runs its `quest init` and `quest check --fix` on the checkout with
    `--root`, from a directory of its own, so the target's `bunfig.toml` never
@@ -1003,7 +1005,7 @@ not pin yet, it opens or updates that target's one `quest-bump` PR as the App:
    merged or closed PR, is replaced. Auto-merge on the open PR is disarmed
    before the push. The PR body links the comparison and records the review as
    skipped, since a pin bump changes no repository code and the target's CI is
-   the gate.
+   the gate. Its title and body name the release.
 5. Findings `quest check --fix` cannot resolve leave the PR a draft with a
    `## Waiting` item quoting them. Otherwise it lands like any PR there, through
    `quest merge`'s path: into GitHub's merge queue, the target's own queue, or
@@ -1016,9 +1018,11 @@ not pin yet, it opens or updates that target's one `quest-bump` PR as the App:
    `quest merge` refuses, is commented on and left for a maintainer.
 
 From there the target's own gate and fixer take the PR, as any other; a newer
-commit on the base replaces it with a fresh bump. `bump.json` in the state
-directory records each target's last bump, so a restart repeats nothing and a
-closed bump is not reopened for the same commit. A target's failure is logged
+release replaces it with a fresh bump. `bump.json` in the state directory
+records each target's last bump by the release it moved to, so a restart
+repeats nothing, a closed bump is not reopened for the same release, and a pass
+that runs before the base's release is tagged leaves that release to the next
+pass. A target's failure is logged
 and retried on the next pass without holding up the others. Each target gets
 its own tokens: `contents: write`, `pull_requests: write`, `merge_queues:
 write`, and reads of `actions`, `administration`, `checks`, and `statuses` for its API
