@@ -43,7 +43,15 @@ import {
 	requeuedHeads,
 } from "./land-watch-fix";
 import { leaveOwnQueue, type OwnQueue, ownPass } from "./land-queue";
-import { BUMP_PERMISSIONS, type BumpConnection, type BumpContext, bumpPass, checkTools, hostTools } from "./land-bump";
+import {
+	BUMP_PERMISSIONS,
+	type BumpConnection,
+	type BumpContext,
+	bumpPass,
+	checkTools,
+	hostTools,
+	latestRelease,
+} from "./land-bump";
 import { pruneLogs } from "./land-prune";
 import { enabledHead, headBefore } from "../github/status";
 import { describe, readSignals } from "../github/signals";
@@ -1033,9 +1041,9 @@ export async function watch(
 				for (const line of await watchPass(repository, { ...options, base }, deps, fix)) warn(line);
 			}
 			if (bump) {
-				const ref = `/repos/${repository.owner}/${repository.repo}/git/ref/heads/${encodeURIComponent(base)}`;
-				const sha = string(object(object(await (await api.request(ref)).json()).object).sha);
-				for (const line of await bumpPass(bump, sha)) warn(line);
+				// Before the first release there is nothing to bump to.
+				const release = await latestRelease(api, repository);
+				if (release) for (const line of await bumpPass(bump, release)) warn(line);
 			}
 			return again;
 		}, deps);

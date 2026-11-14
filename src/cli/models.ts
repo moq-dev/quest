@@ -56,6 +56,18 @@ export type Arm = "A" | "B";
 export const ARM_NAMES: readonly Arm[] = ["A", "B"];
 
 /**
+ * The models that set a PR's risk tier from its diff, ranked: the first that
+ * can run classifies, past any logged out or at its usage limit. The tier never depends on who wrote the change,
+ * so the list is the same for every PR, unlike the reviewers'. Haiku is the
+ * cheapest, and the classifier's prompt stays below the 100k input tokens past
+ * which it costs five times as much.
+ */
+export const CLASSIFIERS: readonly Model[] = [
+	{ harness: "claude", model: "claude-haiku-5-5", effort: "low" },
+	sol("low"),
+];
+
+/**
  * The writer A/B: each armed size's quests split between its first writer
  * and an alternative where published results disagree, until the readout in
  * quest/m0/routing-evidence/README.md deletes it. L runs no arm.
