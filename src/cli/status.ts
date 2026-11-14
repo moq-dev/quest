@@ -17,6 +17,9 @@ export function statusLines(status: Status): string[] {
 		status.reviewRecord === null
 			? "review-record -"
 			: `review-record ${status.reviewRecord.state} ${status.reviewRecord.head}`,
+		status.risk === null
+			? "risk -"
+			: `risk ${status.risk.tier} ${status.risk.state} ${status.risk.classified} ${status.risk.reason}`,
 		status.autoMerge === null
 			? "auto-merge -"
 			: `auto-merge ${status.autoMerge.method} ${status.autoMerge.enabledBy} ${status.autoMerge.enabledAt} ${dash(status.autoMerge.head)}`,

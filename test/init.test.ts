@@ -506,3 +506,26 @@ test("quest check reports stubs from a relative root", () => {
 	init(dir);
 	expect(run(dir).status).toBe(0);
 });
+
+test("quest check reports a malformed risk file at the repository's root", () => {
+	const dir = tempDir();
+	mkdirSync(join(dir, ".git"));
+	write(dir, "AGENTS.md", `${REFERENCE_LINE}\n`);
+	write(dir, "quest/README.md", "# Quests\n\n## Goal\n\nx\n");
+	const run = () =>
+		spawnSync("bun", ["run", "--silent", "quest", "--root", relative(process.cwd(), dir), "check", "--no-stubs"], {
+			encoding: "utf8",
+		});
+	write(dir, "RISK.md", "# Risk\n\n## High\n\n- `/etc` - absolute\n- `src/` charges customers\n");
+	const broken = run();
+	expect(broken.status).toBe(1);
+	expect(broken.stderr).toBe(
+		[
+			"quest: RISK.md:5: `/etc` is no pattern: it starts with /, but a pattern is a path from the repository root",
+			"quest: RISK.md:6: a `## High` item is a backticked pattern, ` - `, and why its change is high",
+			"",
+		].join("\n"),
+	);
+	write(dir, "RISK.md", "# Risk\n\n## High\n\n- `src/billing/` - charges customers\n");
+	expect(run()).toMatchObject({ status: 0, stderr: "" });
+});

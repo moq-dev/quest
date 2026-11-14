@@ -58,20 +58,24 @@ Agent's choices, for the implementer to revisit:
 - A widening is proposed with its class's numbers: PRs merged, culprits
   among them, and what a tap cost in waiting time.
 - Tell the maintainer when a tier rises on a later head of a PR they
-  already picked; the pick ends there, as the standing pick's does.
+  already picked; the pick ends there, as the standing pick's does. A
+  tier that rises reopens whatever the lower tier skipped.
+- The maintainer can override a tier, recorded with its reason, and the
+  report counts how often they do as a reading of the tier's accuracy.
+  [#716](https://github.com/moq-dev/quest/pull/716), which set the tier,
+  left this here, since nothing reads an override until the tier gates
+  something.
 
 Open question for the maintainer, asked before the list is written: the
 standing pick covers CI changes today, but the post requires a person for
-"any CI workflow file", and
-[the risk tier](/quest/m0/benchmark/risk-tier.md) makes workflow files
-always high. Recommended: keep them high, which takes CI changes out of
+"any CI workflow file", and `quest review` holds workflow files always
+high. Recommended: keep them high, which takes CI changes out of
 automatic merging.
 
 ## Required
 
-- [Give every PR a risk tier from its diff](/quest/m0/benchmark/risk-tier.md) -
-  the tier and the repository's risk file, with a week of tiers the
-  maintainer has read
+- [Read a week of risk tiers before guardrails act on them](/quest/m0/benchmark/risk-tier.md) -
+  the maintainer's verdict that the recorded tiers can be trusted
 
 ## Related
 

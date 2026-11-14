@@ -2,7 +2,7 @@
 // the work went by the PR's own record. token-max reads and prices the sessions, on this host and any SSH host
 // named; quest ties each to a PR by the branches and repositories token-max exports for it.
 import { spawnSync } from "node:child_process";
-import { type Size, SIZES, handedBack, questBranch } from "../core";
+import { type RecordedRisk, type Size, SIZES, TIERS, type Tier, handedBack, questBranch, recordedRisk } from "../core";
 import { recorded } from "./models-record";
 import { type ClaimDependencies, upstream } from "./claims";
 import { repositoryPath } from "../github/client";
@@ -54,7 +54,7 @@ export interface Session {
 	skippedLines: number;
 }
 
-export type Role = "implementing" | "iterating" | "reviewing";
+export type Role = "implementing" | "iterating" | "reviewing" | "classifying";
 
 /** One session attributed to a PR. */
 export interface SessionRow {
@@ -84,6 +84,8 @@ export interface PullRow {
 	unread: string[];
 	/** Each reviewer the PR's `## Review` record names, with its latest round and its tally. */
 	review: ReviewSummary[];
+	/** The risk tier the record names for its head, null when it names none. */
+	risk: RecordedRisk | null;
 	/** Who made each mechanical fix the land fixer recorded, or `quest land watch` for a base merge it made alone. */
 	landFixes: string[];
 	/** Later PRs that list it under `## Caused by`. */
@@ -155,6 +157,17 @@ export interface ReviewerRow {
 	spent: Spend;
 }
 
+/** The PRs of one risk tier, or of none (`tier` null): how many merged, how many a reviewer raised, and later fixed. */
+export interface TierRow {
+	tier: Tier | null;
+	pulls: number;
+	merged: number;
+	/** PRs a reviewer judged riskier than the classifier did. */
+	raised: number;
+	/** PRs a later PR names under `## Caused by`. */
+	culprits: number;
+}
+
 /** One online reviewer over the merged PRs reported. */
 export interface OnlineRow {
 	reviewer: string;
@@ -179,6 +192,7 @@ export interface Usage {
 	spend: SpendRow[];
 	accuracy: AccuracyRow[];
 	reviewers: ReviewerRow[];
+	tiers: TierRow[];
 	online: OnlineRow[];
 	/** The sessions on no PR reported here, from every repository and agent token-max reads; null when narrowed. */
 	unattributed: ({ sessions: number } & Tokens) | null;
@@ -425,6 +439,7 @@ function pullRows(pulls: Pull[], repository: Repository): PullRow[] {
 			),
 			unread: own.implementers.filter(({ fields }) => fields === null).map(({ item }) => item),
 			review: settledOnMerge(parseReview(each.body), each.state === "merged"),
+			risk: recordedRisk(each.body),
 			landFixes: fixes(each.body),
 			fixedBy: (fixedBy.get(each.number) ?? []).sort((a, b) => a - b),
 			online: [],
@@ -468,18 +483,18 @@ function owners(sessions: Session[]): (session: Session) => string[] | null {
 /**
  * Attribute each session to the PR whose head branch it last named, among those still open when the session
  * reached the branch and headed from a repository its host resolved for it, else to its parent's PR, as a sub-agent
- * in a detached checkout. Give it a role: reviewing when a PR's review record names it or Codex marks it a review,
- * its parent's when both share the PR, as a review's sub-agents do, else implementing when its first request in the
- * window came before its PR opened, and iterating otherwise. `evidence` holds every exported copy, folded ones
- * included, since a dropped copy may be the only one naming its directory's repository. Returns the sessions it gave
- * a PR in `rows`, and those on no PR here.
+ * in a detached checkout. Give it a role: classifying when a PR's review record names it as the risk classifier,
+ * reviewing when the record names it as a reviewer or Codex marks it a review, its parent's when both share the PR,
+ * as a review's sub-agents do, else implementing when its first request in the window came before its PR opened,
+ * and iterating otherwise. `evidence` holds every exported copy, folded ones included, since a dropped copy may be
+ * the only one naming its directory's repository. Returns the sessions it gave a PR in `rows`, and those on no PR here.
  */
 function attribute(
 	sessions: Session[],
 	evidence: Session[],
 	pulls: Pull[],
 	rows: Map<number, PullRow>,
-	reviewers: Set<string>,
+	recorded: { reviewers: Set<string>; classifiers: Set<string> },
 ): { attributed: Session[]; unattributed: Session[] } {
 	const byBranch = new Map<string, Pull[]>();
 	for (const each of [...pulls].sort((a, b) => a.created - b.created))
@@ -518,13 +533,15 @@ function attribute(
 			result = {
 				pull,
 				role:
-					session.review || (session.id !== null && reviewers.has(session.id))
-						? "reviewing"
-						: above && above.pull === pull
-							? above.role
-							: session.start < pull.created
-								? "implementing"
-								: "iterating",
+					session.id !== null && recorded.classifiers.has(session.id)
+						? "classifying"
+						: session.review || (session.id !== null && recorded.reviewers.has(session.id))
+							? "reviewing"
+							: above && above.pull === pull
+								? above.role
+								: session.start < pull.created
+									? "implementing"
+									: "iterating",
 			};
 		placed.set(session, result);
 		return result;
@@ -574,7 +591,7 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 				row.sessions++;
 				add(row, spent);
 			}
-	const roles: Role[] = ["implementing", "iterating", "reviewing"];
+	const roles: Role[] = ["implementing", "iterating", "reviewing", "classifying"];
 	return [...rows.values()].sort((a, b) =>
 		order(
 			[a.size, roles.indexOf(a.role), a.harness, a.model, a.effort],
@@ -707,7 +724,7 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 			).values(),
 		];
 		const writing = each.sessions
-			.filter((session) => session.role !== "reviewing")
+			.filter((session) => session.role === "implementing" || session.role === "iterating")
 			.flatMap((session) => session.models.map((spent) => ({ ...spent, role: session.role })));
 		const shares =
 			each.state === "merged" ? share(writing, distinct) : new Map<number, Tokens & { split: number }>();
@@ -825,6 +842,23 @@ function reviewerRows(pulls: PullRow[]): ReviewerRow[] {
 	);
 }
 
+/** One row per risk tier among `pulls`, lowest first, and PRs with none last. */
+function tierRows(pulls: PullRow[]): TierRow[] {
+	return [...TIERS, null].flatMap((tier) => {
+		const rows = pulls.filter((each) => (each.risk?.tier ?? null) === tier);
+		if (rows.length === 0) return [];
+		return [
+			{
+				tier,
+				pulls: rows.length,
+				merged: rows.filter((each) => each.state === "merged").length,
+				raised: rows.filter((each) => each.risk !== null && each.risk.tier !== each.risk.classified).length,
+				culprits: rows.filter((each) => each.fixedBy.length > 0).length,
+			},
+		];
+	});
+}
+
 function onlineRows(pulls: PullRow[]): OnlineRow[] {
 	const merged = pulls.filter((each) => each.state === "merged");
 	const rows = new Map<string, OnlineRow>();
@@ -898,7 +932,11 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 	if (exported !== null) {
 		// Every PR in the window competes for a session, so narrowing never hands one PR another's sessions.
 		const reviewers = new Set(allRows.flatMap((row) => row.review.flatMap((review) => review.session ?? [])));
-		const { attributed, unattributed: left } = attribute(kept, exported ?? [], all, byNumber, reviewers);
+		const classifiers = new Set(allRows.flatMap((row) => row.risk?.session ?? []));
+		const { attributed, unattributed: left } = attribute(kept, exported ?? [], all, byNumber, {
+			reviewers,
+			classifiers,
+		});
 		const reported = narrowed ? attributed : [...attributed, ...left];
 		if (!narrowed) {
 			unattributed = { sessions: left.length, ...zero() };
@@ -923,6 +961,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		spend: spendRows(rows),
 		accuracy: accuracyRows(rows),
 		reviewers: reviewerRows(rows),
+		tiers: tierRows(rows),
 		online: onlineRows(rows),
 		unattributed,
 		folded: { copies: folded.length, hosts: [...new Set(folded.map((session) => session.host))] },
@@ -973,7 +1012,14 @@ export function usageLines(report: Usage): string[] {
 	];
 	for (const row of report.pulls) {
 		const state = `${row.state}${row.draft ? (row.handedBack ? " draft, handed back" : " draft") : ""}`;
-		lines.push("", `#${row.number} ${row.size ?? "-"} ${state}: ${row.title} (${row.branch})`);
+		lines.push(
+			"",
+			`#${row.number} ${row.size ?? "-"} ${row.risk?.tier ?? "-"} ${state}: ${row.title} (${row.branch})`,
+		);
+		if (row.risk)
+			lines.push(
+				`  risk: ${row.risk.tier}, ${row.risk.reason}${row.risk.tier === row.risk.classified ? "" : `; raised from ${row.risk.classified} by a reviewer`}`,
+			);
 		for (const i of row.implementers)
 			lines.push(`  implementer: ${i.harness}, ${i.model}, ${i.effort} effort${i.size ? ` (${i.size})` : ""}`);
 		for (const item of row.unread) lines.push(`  unread: ${item}`);
@@ -1042,6 +1088,18 @@ export function usageLines(report: Usage): string[] {
 					r.model,
 					`${r.effort}${r.shadow ? ", shadow" : ""}`,
 					`${r.reviewed} reviewed: rounds ${mean(r.tally.rounds, r.reviewed)}, ${findingsText({ ...r.tally, first: null })}, ${firsts(r.firstRounds)}; ${per(r.spent, "PR reviewed")}`,
+				]),
+			),
+		);
+	if (report.tiers.length)
+		lines.push(
+			"",
+			"By risk tier:",
+			...table(
+				report.tiers.map((t) => [
+					" ",
+					t.tier ?? "-",
+					`${t.pulls} PRs, ${t.merged} merged, ${t.raised} raised by a reviewer, ${t.culprits} later fixed`,
 				]),
 			),
 		);
