@@ -123,6 +123,8 @@ Record a wait there, not in a draft PR holding only evidence or steps for a pers
 Unlike a blocked quest it stays ready, so it resurfaces whenever ready work is triaged instead of stalling in the backlog.
 `quest waiting` lists every waiting item, the maintainer's first, ranked by what each unblocks, and `/quest-complete` walks the maintainer through them.
 
+A PR that launches something new for users to try, such as a site, demo, or feature, adds a follow-up quest for the maintainer to try and promote it, its `Maintainer:` item saying where to find it.
+
 ## Execution
 
 Start only ready quests.
