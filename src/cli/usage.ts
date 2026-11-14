@@ -705,11 +705,6 @@ function part(tokens: Tokens, n: number): Tokens {
 	};
 }
 
-/**
- * A branch's saved tallies span every PR from it, so only one of its PRs that `counts` counts them: the one whose
- * record holds the latest tally, as the most rounds show, since each round rewrites only its own PR's record; the
- * newest breaks a tie. A deleted fork has no repository, so its PR stands alone.
- */
 const noOutcomes = (): Omit<AccuracyRow, "size" | "harness" | "model" | "effort" | "spent"> => ({
 	pulls: 0,
 	merged: 0,
@@ -745,6 +740,11 @@ function outcome(row: ReturnType<typeof noOutcomes>, each: PullRow, latest: Set<
 	);
 }
 
+/**
+ * A branch's saved tallies span every PR from it, so only one of its PRs that `counts` counts them: the one whose
+ * record holds the latest tally, as the most rounds show, since each round rewrites only its own PR's record; the
+ * newest breaks a tie. A deleted fork has no repository, so its PR stands alone.
+ */
 function tallied(pulls: PullRow[], counts: (pull: PullRow) => boolean): Set<PullRow> {
 	const branch = (each: PullRow) => JSON.stringify([each.repository ?? each.number, each.branch]);
 	const rounds = (each: PullRow) =>
