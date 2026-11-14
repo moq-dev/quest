@@ -380,6 +380,14 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			// name the same origin and endpoint. With no checkout left, every repository token-max resolved for it
 			// must be this group's.
 			const routed = (s: Session): boolean => {
+				// Repositories token-max resolved that are none of this group's, as for a deleted nested clone of
+				// another, rule it out whatever checkout now holds its folder.
+				if (
+					s.repositories !== null &&
+					s.repositories.length > 0 &&
+					!s.repositories.some((r) => repositories.has(r))
+				)
+					return false;
 				if (s.cwd !== null && insideCheckout(s.cwd)) {
 					const own = questRoot(s.cwd);
 					if (own === null) return false;

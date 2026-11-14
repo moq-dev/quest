@@ -245,6 +245,12 @@ test("a sub-agent is sent only where its own checkout routes it", async () => {
 		// A deleted folder routes by the checkout still holding its nearest existing parent.
 		session("hereGone", "quest/m0/a", { parent: "s1", cwd: join(root, "deleted", "sub") }),
 		session("optedOutGone", "quest/m0/a", { parent: "s1", cwd: join(checkout(), "deleted", "sub") }),
+		// A deleted nested clone of another repository, inside this checkout.
+		session("nestedGone", "main", {
+			parent: "s1",
+			cwd: join(root, "vendor", "other"),
+			repositories: ["acme/other"],
+		}),
 		session("fork", "quest/m0/a", { parent: "s1", cwd: other, repositories: ["acme/fork", "acme/proj"] }),
 		// Deleted checkouts: every repository resolved must be this one's.
 		session("gone", "quest/m0/a", { parent: "s1" }),
