@@ -47,7 +47,7 @@ const id = (harness: string, session: string) => `${harness}\0${session}`;
 const iso = (ms: number) => new Date(ms).toISOString();
 
 /**
- * A record for each session with an ID that `emit` names, or that worked on a PR. A session's PRs are its own, else its parent's, else, for one that spawned
+ * A record for each session that `emit` names, or that worked on a PR. A session's PRs are its own, else its parent's, else, for one that spawned
  * sub-agents, every PR they worked on. Its role is reviewing when Codex marks it a review or a PR's review record
  * names it, else the one its first quest skill gives, else its parent's unless that is coordinating, else coordinating for a
  * session whose PRs are only its sub-agents', planning on a planning skill's branch, and implementing or iterating
@@ -57,7 +57,7 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 	const named = input.sessions.filter((s): s is Session & { id: string } => s.id !== null);
 	const byId = new Map(named.map((s) => [id(s.harness, s.id), s]));
 	const children = new Map<Session, Session[]>();
-	for (const s of named) {
+	for (const s of input.sessions) {
 		const parent = s.parent === null ? undefined : byId.get(id(s.harness, s.parent));
 		if (parent && parent !== s) children.set(parent, [...(children.get(parent) ?? []), s]);
 	}
@@ -76,7 +76,7 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 		const own = input.own.get(s);
 		if (own) return { pulls: [own], via: "own" };
 		const parent = parentOf(s);
-		if (parent && depth < named.length) {
+		if (parent && depth < input.sessions.length) {
 			const inherited = pullsOf(parent, depth + 1);
 			if (inherited.pulls.length) return { pulls: inherited.pulls, via: "parent" };
 		}
@@ -92,16 +92,16 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 		return facts.get(s)!;
 	};
 
-	const roleOf = (s: Session & { id: string }, depth = 0): Role => {
-		if (s.review || input.reviewers.has(s.id)) return "reviewing";
+	const roleOf = (s: Session, depth = 0): Role => {
+		if (s.review || (s.id !== null && input.reviewers.has(s.id))) return "reviewing";
 		const skill = factsOf(s)?.skill;
 		const fromSkill = skill ? SKILL_ROLES[skill] : undefined;
 		if (fromSkill) return fromSkill;
 		const own = input.own.get(s);
 		const parent = parentOf(s);
 		// A sub-agent with no skill of its own works for its parent, unless that parent hands out whole PRs.
-		if (parent?.id && depth < named.length) {
-			const inherited = roleOf(parent as Session & { id: string }, depth + 1);
+		if (parent && depth < input.sessions.length) {
+			const inherited = roleOf(parent, depth + 1);
 			if (inherited !== "coordinating") return inherited;
 		}
 		const branch = own?.branch ?? lastBranch(s);
@@ -110,9 +110,9 @@ export function buildRecords(input: RecordInput): Map<Session, SessionRecord> {
 		return s.start < own.created ? "implementing" : "iterating";
 	};
 
-	const waits = assignWaits(named, input.waits, parentOf);
+	const waits = assignWaits(named, input.waits, parentOf, input.since);
 	const records = new Map<Session, SessionRecord>();
-	for (const s of named) {
+	for (const s of input.sessions) {
 		const { pulls, via } = pullsOf(s);
 		if (input.emit ? !input.emit.has(s) : pulls.length === 0) continue;
 		const own = input.own.get(s);
@@ -190,12 +190,14 @@ function assignWaits(
 	sessions: (Session & { id: string })[],
 	logged: LoggedWait[],
 	parentOf: (s: Session) => Session | undefined,
+	since: number,
 ): Map<Session, LoggedWait[]> {
 	const local = sessions.filter((s) => s.host === null);
 	const byId = new Map(local.map((s) => [id(s.harness, s.id), s]));
 	const assigned = new Map<Session, LoggedWait[]>();
 	for (const wait of logged) {
-		const start = Date.parse(wait.start);
+		// A session's start is its first request in the window, so a wait begun before the window is placed by its end.
+		const start = Date.parse(wait.start) < since ? Date.parse(wait.end) : Date.parse(wait.start);
 		const named = wait.sessions.flatMap((n) => byId.get(id(n.harness, n.session)) ?? []);
 		const owner = named.filter((s) => s.start <= start).sort((a, b) => b.start - a.start)[0];
 		if (!owner) continue;

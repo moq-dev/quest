@@ -38,6 +38,9 @@ test("on Linux, the sender is a systemd user service running quest from PATH, es
 	const bin = env.PATH!.split(":")[1]!;
 	expect(unit).toContain(`ExecStart="${bin.replace("%", "%%").replace("$", () => "$$")}/quest" records sender`);
 	expect(unit).toContain(`Environment="PATH=${env.PATH!.replace("%", "%%")}"`);
+	expect(unit).toContain(`Environment="XDG_STATE_HOME=${env.XDG_STATE_HOME}"`);
+	expect(unit).toContain(`Environment="XDG_CONFIG_HOME=${env.XDG_CONFIG_HOME}"`);
+	expect(unit).not.toContain("CODEX_HOME");
 	expect(unit).toContain("Restart=always");
 	expect(ran).toEqual([
 		"systemctl --user daemon-reload",
@@ -59,6 +62,7 @@ test("on macOS, the sender is a launchd agent, replaced on reinstall", () => {
 	const plist = readFileSync(path, "utf8");
 	expect(plist).toContain("<string>records</string><string>sender</string>");
 	expect(plist).toContain("/a&amp;b</string>");
+	expect(plist).toContain(`<key>XDG_STATE_HOME</key><string>${env.XDG_STATE_HOME}</string>`);
 	expect(plist).toContain("<key>KeepAlive</key><true/>");
 	expect(ran).toEqual(["try launchctl bootout gui/501/dev.moq.quest.records", `launchctl bootstrap gui/501 ${path}`]);
 });

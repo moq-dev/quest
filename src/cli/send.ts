@@ -11,7 +11,7 @@ import { type SessionRecord } from "../core";
 import { type GitHubDependencies, GitHub } from "../github/client";
 import { baseRepository } from "./claims";
 import { discoveryEnv } from "./git";
-import { githubRepository } from "./github";
+import { readRemote, remoteRepository } from "./github";
 import { eachLine } from "./messages";
 import { questRoot } from "./rules";
 import { type Pull, type Session, fold, key, sessionRecords, updatedPulls } from "./usage";
@@ -163,8 +163,8 @@ export function queue(stopped: Stopped, env: NodeJS.ProcessEnv = process.env): Q
 		return { notices, queued: false };
 	};
 	const run = (args: string[]) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8", env: discoveryEnv() });
-	const url = run(["remote", "get-url", "origin"]);
-	const origin = url.status === 0 ? githubRepository(url.stdout.trim()) : null;
+	const remote = readRemote(root, "origin");
+	const origin = remote === null ? null : remoteRepository(remote).repository;
 	// A checkout off GitHub has no PRs for a record to name.
 	if (origin === null) return { notices, queued: false };
 	const repository = `${origin.owner}/${origin.repo}`.toLowerCase();
@@ -343,7 +343,7 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 	}
 	const sent: Sent[] = [];
 	const failures: string[] = [];
-	const refused: string[] = [];
+	const notes: string[] = [];
 	for (const group of groups.values()) {
 		const { endpoint, origin, prefix } = group[0]!.pending;
 		try {
@@ -357,28 +357,40 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			const repository = await baseRepository(client, { owner, repo }, prefix);
 			const pulls: Pull[] = await updatedPulls(client, repository, since);
 			const emit = new Set<Session>();
+			const missing: typeof group = [];
 			for (const q of group) {
 				const session = byId.get(`${q.pending.harness}\0${q.pending.session}`);
-				if (!session)
-					throw new Error(
-						`token-max lists no ${q.pending.harness} session ${q.pending.session} on this host`,
-					);
-				emit.add(session);
+				if (session) emit.add(session);
+				else missing.push(q);
 			}
-			// A sub-agent stops without the stop hook naming it, so each queued session brings its own.
+			// A session token-max no longer lists, as when its transcript was deleted, can never be built: it is
+			// dropped and said, so it does not hold back the rest of its group forever.
+			for (const q of missing) {
+				settle(q);
+				notes.push(
+					`token-max lists no ${q.pending.harness} session ${q.pending.session} on this host, so its record was dropped`,
+				);
+			}
+			const repositories = new Set([origin, key(repository)]);
+			// A sub-agent stops without the stop hook naming it, so each queued session brings its own, unless it
+			// worked in another repository, whose checkout routes its own records.
 			for (let grew = true; grew;) {
 				grew = false;
-				for (const s of kept)
+				for (const s of kept) {
+					const parent = s.parent === null ? undefined : byId.get(`${s.harness}\0${s.parent}`);
 					if (
+						s.id !== null &&
 						!emit.has(s) &&
-						s.parent !== null &&
-						byId.get(`${s.harness}\0${s.parent}`) &&
-						emit.has(byId.get(`${s.harness}\0${s.parent}`)!)
+						parent !== undefined &&
+						emit.has(parent) &&
+						(s.repositories === null || s.repositories.some((r) => repositories.has(r)))
 					) {
 						emit.add(s);
 						grew = true;
 					}
+				}
 			}
+			if (emit.size === 0) continue;
 			const records = sessionRecords({
 				repository: key(repository),
 				sessions: kept,
@@ -397,7 +409,7 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			if (response.status === 401 || response.status === 403) {
 				refuse(deps.env, endpoint, token);
 				for (const q of group) settle(q);
-				refused.push(
+				notes.push(
 					`${endpoint} refused this host's token (${response.status}), so it is sent no more session records until the token changes`,
 				);
 				sent.push({ endpoint, repository: key(repository), records: upload.length, refused: true });
@@ -411,8 +423,8 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			failures.push(`${origin} to ${endpoint}: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
-	if (failures.length) throw new Error([...refused, ...failures].join("; "));
-	if (refused.length) writeFailure(deps.env, refused.join("; "));
+	if (failures.length) throw new Error([...notes, ...failures].join("; "));
+	if (notes.length) writeFailure(deps.env, notes.join("; "));
 	else rmSync(join(dir, "failure"), { force: true });
 	return sent;
 }

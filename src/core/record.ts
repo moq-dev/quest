@@ -40,8 +40,11 @@ export interface ModelSpend {
 export interface SessionRecord {
 	/** `claude` or `codex`. */
 	harness: string;
-	/** The harness's own session ID; a Claude sub-agent's is its agent ID. */
-	session: string;
+	/**
+	 * The harness's own session ID; a Claude sub-agent's is its agent ID. Null when its transcript names none, which
+	 * `quest usage` still reports but no upload carries, since the store replaces a record by its ID.
+	 */
+	session: string | null;
 	/** The session that spawned it, or null. */
 	parent: string | null;
 	/** The base repository as lowercase `owner/repo`. */
@@ -121,7 +124,7 @@ export function parseRecord(value: unknown): SessionRecord {
 	if (quest !== null && !/^quest\/.+\.md$/.test(quest)) fail("quest is not a quest path");
 	const record: SessionRecord = {
 		harness: text(value.harness, "harness"),
-		session: text(value.session, "session"),
+		session: maybe(value.session, "session"),
 		parent: maybe(value.parent, "parent"),
 		repository,
 		branch: maybe(value.branch, "branch"),
@@ -167,12 +170,13 @@ export function parseRecord(value: unknown): SessionRecord {
 	return record;
 }
 
-/** An upload's body, failing whole on any malformed record or a session sent twice. */
+/** An upload's body, failing whole on any malformed record, one naming no session, or a session sent twice. */
 export function parseUpload(value: unknown): RecordUpload {
 	if (!isObject(value)) return fail("the upload is not an object");
 	exact(value, ["records"], "the upload");
 	if (!Array.isArray(value.records)) return fail("the upload has no record list");
 	const records = value.records.map(parseRecord);
+	if (records.some((r) => r.session === null)) fail("an uploaded record names no session");
 	const ids = new Set(records.map((r) => `${r.harness}\0${r.session}`));
 	if (ids.size !== records.length) fail("the upload holds a session twice");
 	return { records };

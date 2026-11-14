@@ -59,13 +59,21 @@ const systemdWord = (text: string) => `"${text.replace(/\\/g, "\\\\").replace(/"
 const execWord = (text: string) => systemdWord(text).replace(/\$/g, "$$$$");
 
 /**
+ * What the sender reads beyond PATH, kept from the installer's environment, since the service manager's may lack
+ * them: where the hooks queue and the tokens live, where token-max finds transcripts, and gh's login. Secrets such
+ * as GH_TOKEN are never written into the definition.
+ */
+const KEPT = ["XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GH_CONFIG_DIR"];
+
+/**
  * The service definition running `quest records sender` with the installer's PATH, so it finds token-max, gh, and the
- * runtime `quest` needs, as the hooks do.
+ * runtime `quest` needs, as the hooks do, and the directories `KEPT` names.
  */
 export function serviceDefinition(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string {
 	const kind = supported(platform);
 	const quest = questOnPath(env);
-	const path = env.PATH ?? "";
+	const vars: [string, string][] = [["PATH", env.PATH ?? ""]];
+	for (const name of KEPT) if (env[name]) vars.push([name, env[name]!]);
 	if (kind === "linux")
 		return [
 			"[Unit]",
@@ -73,7 +81,7 @@ export function serviceDefinition(platform: NodeJS.Platform, env: NodeJS.Process
 			"",
 			"[Service]",
 			`ExecStart=${execWord(quest)} records sender`,
-			`Environment=${systemdWord(`PATH=${path}`)}`,
+			...vars.map(([name, value]) => `Environment=${systemdWord(`${name}=${value}`)}`),
 			"Restart=always",
 			"RestartSec=60",
 			"",
@@ -90,7 +98,7 @@ export function serviceDefinition(platform: NodeJS.Platform, env: NodeJS.Process
 	<key>ProgramArguments</key>
 	<array><string>${xml(quest)}</string><string>records</string><string>sender</string></array>
 	<key>EnvironmentVariables</key>
-	<dict><key>PATH</key><string>${xml(path)}</string></dict>
+	<dict>${vars.map(([name, value]) => `<key>${name}</key><string>${xml(value)}</string>`).join("")}</dict>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><true/>
 	<key>ThrottleInterval</key><integer>60</integer>

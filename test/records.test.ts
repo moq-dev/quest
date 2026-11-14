@@ -101,6 +101,9 @@ describe("parseRecord", () => {
 		expect(() => parseUpload({ records: [record(), record({ session: "s2", cost: Number.NaN })] })).toThrow("cost");
 		expect(() => parseUpload({ records: [record(), record()] })).toThrow("twice");
 		expect(() => parseUpload({ records: [], more: true })).toThrow("unknown field");
+		// A record may name no session, but no upload carries one, since the store replaces records by session.
+		expect(parseRecord(record({ session: null })).session).toBeNull();
+		expect(() => parseUpload({ records: [record({ session: null })] })).toThrow("names no session");
 	});
 });
 
@@ -405,6 +408,25 @@ describe("buildRecords", () => {
 			since: 0,
 		});
 		expect([...records.keys()]).toEqual([on]);
+	});
+
+	test("a session with no ID keeps its PR, and a wait begun before the window still counts", () => {
+		const anonymous = { ...session("x"), id: null };
+		const named = session("n", { start: at("10:30:00") });
+		const records = buildRecords({
+			repository: "acme/proj",
+			sessions: [anonymous, named],
+			own: new Map([
+				[anonymous, pull(1, "quest/m0/a", "09:00:00")],
+				[named, pull(1, "quest/m0/a", "09:00:00")],
+			]),
+			reviewers: new Set(),
+			// Begun at 10:10, before the window opened at 10:20 and before the session's first request in it.
+			waits: [{ ...logged("pull", "10:10:00", ["n"]), end: "2026-11-06T10:40:00.000Z" }],
+			since: at("10:20:00"),
+		});
+		expect(records.get(anonymous)).toMatchObject({ session: null, pulls: [1] });
+		expect(records.get(named)!.waits!.map((w) => w.kind)).toEqual(["pull"]);
 	});
 
 	test("a person's wait is windowed, and an unreadable transcript leaves waits unknown", () => {

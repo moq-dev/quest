@@ -209,14 +209,51 @@ test("a failed upload stays queued and is said once; a refused token stops sendi
 	expect(queue(stopped(root), env).queued).toBe(true);
 });
 
-test("the sender fails loud without token-max or a session it was queued for, keeping the queue", async () => {
+test("the sender fails loud without token-max, keeping the queue", async () => {
 	const env = home();
 	queue(stopped(checkout(ENDPOINT)), env);
 	await expect(sendPass(sender(env, 200, null).deps)).rejects.toThrow("token-max is not installed");
-	await expect(sendPass(sender(env, 200, [session("x", "quest/m0/a")]).deps)).rejects.toThrow(
-		"lists no claude session s1",
-	);
 	expect(pending(env)).toHaveLength(1);
+});
+
+test("a session token-max no longer lists is dropped and said, without holding back the rest", async () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	queue(stopped(root), env);
+	queue({ ...stopped(root), session: "gone" }, env);
+	const { deps, uploads } = sender(env, 200, [session("s1", "quest/m0/a")]);
+	expect(await sendPass(deps)).toEqual([{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, refused: false }]);
+	expect(parseUpload(uploads[0]!.body).records.map((r) => r.session)).toEqual(["s1"]);
+	expect(pending(env)).toEqual([]);
+	expect(queue(stopped(root), env).notices).toEqual([
+		expect.stringContaining("lists no claude session gone on this host, so its record was dropped"),
+	]);
+});
+
+test("a sub-agent working in another repository is left to its own checkout", async () => {
+	const env = home();
+	queue(stopped(checkout(ENDPOINT)), env);
+	const sessions = [
+		session("s1", "quest/m0/a"),
+		session("here", "quest/m0/a", { parent: "s1" }),
+		session("unknown", "quest/m0/a", { parent: "s1", repositories: null }),
+		session("elsewhere", "main", { parent: "s1", repositories: ["acme/other"] }),
+	];
+	const { deps, uploads } = sender(env, 200, sessions);
+	await sendPass(deps);
+	expect(parseUpload(uploads[0]!.body).records.map((r) => r.session)).toEqual(["s1", "here", "unknown"]);
+});
+
+test("an origin that a URL rewrite points at GitHub is read as configured", () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	execFileSync("git", ["-C", root, "remote", "set-url", "origin", "gh:acme/proj"]);
+	execFileSync("git", ["-C", root, "config", "url.https://github.com/.insteadOf", "gh:"]);
+	expect(queue(stopped(root), env).queued).toBe(true);
+	execFileSync("git", ["-C", root, "config", "--unset", "url.https://github.com/.insteadOf"]);
+	execFileSync("git", ["-C", root, "remote", "set-url", "origin", "https://github.com/acme/proj.git"]);
+	execFileSync("git", ["-C", root, "config", "url.git@github-work:.insteadOf", "https://github.com/"]);
+	expect(queue(stopped(root), env).queued).toBe(true);
 });
 
 test("Claude Code's and Codex's Stop queue the session", () => {
