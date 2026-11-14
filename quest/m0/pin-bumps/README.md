@@ -24,7 +24,7 @@ the host's watcher has no `--bump` flags, since its wiring sits in the stale
 draft [kixelated/nixos#36](https://github.com/kixelated/nixos/pull/36).
 
 - What do consumers pin? ✅ A release, cut on every merge that changes what ships
-  (rejected: quest's `main`, which the bump pass follows today).
+  (rejected: quest's `main`, which the bump pass followed before).
 - What bumps them? ✅ The watcher's `--bump`, following the latest release
   (rejected: Renovate with a stale-stub check, since hosted Renovate cannot run
   `quest init` or `quest check --fix` and most bumps need them: 48 quest
