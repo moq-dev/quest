@@ -695,6 +695,10 @@ describe("usage", () => {
 					: [],
 			),
 			comments: connection([]),
+			// #10 was handed back as a draft before `quest ready` dropped its `## Waiting` section.
+			userContentEdits: connection(
+				number === 10 ? [{ diff: "Body.\n\n## Waiting\n\n- Maintainer: pick one\n" }, { diff: null }] : [],
+			),
 		});
 		const fetch = async (input: string | URL | Request, init?: RequestInit) => {
 			const url = new URL(String(input));
@@ -825,6 +829,9 @@ describe("usage", () => {
 		// #10's writing spend: the iterate's Sol session to its own line though the efforts differ, and the Haiku
 		// sub-agent, which no line names, to the PR's main writer; the risk classifier's session is not writing. Its
 		// other reviewers record no first round, so no PR counts toward the writers' first rounds.
+		// Only #10's earlier body hands it back, which counts for both of its writers.
+		expect(report.pulls.filter((p) => p.handedBack).map((p) => p.number)).toEqual([10]);
+		expect(report.accuracy.map((a) => a.handedBack)).toEqual([1, 1]);
 		expect(report.accuracy.map((a) => [a.spent.pulls, a.spent.cost, a.firstRounds.pulls])).toEqual([
 			[1, 2, 0],
 			[1, 5.5, 0],
