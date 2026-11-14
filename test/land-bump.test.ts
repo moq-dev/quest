@@ -296,6 +296,13 @@ describe("unpin", () => {
 		expect(unpin(flakeNix("v1.0.0"), SOURCE, "v1.0.0")).toBe(flakeNix());
 	});
 
+	test("drops a ref from the source's query", () => {
+		const url = (query: string) => flakeNix().replace('"github:moq-dev/quest"', `"github:moq-dev/quest${query}"`);
+		expect(unpin(url("?ref=main"), SOURCE, "main")).toBe(flakeNix());
+		expect(unpin(url("?dir=nix&ref=main"), SOURCE, "main")).toBe(url("?dir=nix"));
+		expect(unpin(url("?ref=main&dir=nix"), SOURCE, "main")).toBe(url("?dir=nix"));
+	});
+
 	test("matches the source's name in any case", () => {
 		expect(unpin(flakeNix(OLD).replace("moq-dev/quest", "Moq-Dev/Quest"), SOURCE, OLD)).toBe(flakeNix());
 	});

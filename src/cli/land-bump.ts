@@ -207,12 +207,21 @@ export async function discoverTargets(
  * bump is a lock-only change. The URL must appear exactly once.
  */
 export function unpin(flake: string, source: Repository, rev: string): string {
-	const url = `github:${name(source)}/${rev}`;
+	const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const repo = escape(name(source));
+	const ref = escape(rev);
+	// The path form `github:o/r/<rev>` or the query form `github:o/r?ref=<rev>`, among other parameters.
 	// GitHub names are case-insensitive, as `questInput` matches them.
-	const pattern = new RegExp(`"${url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "gi");
+	const pattern = new RegExp(`"github:${repo}(?:/${ref}|\\?((?:[^"&]*&)*?)(?:ref|rev)=${ref}((?:&[^"]*)?))"`, "gi");
 	const found = flake.match(pattern)?.length ?? 0;
-	if (found !== 1) throw new Error(`flake.nix names "${url}" ${found} times, where a bump can unpin exactly one`);
-	return flake.replace(pattern, `"github:${name(source)}"`);
+	if (found !== 1)
+		throw new Error(
+			`flake.nix names "github:${name(source)}/${rev}" ${found} times, where a bump can unpin exactly one`,
+		);
+	return flake.replace(pattern, (_match, before?: string, after?: string) => {
+		const query = `${before ?? ""}${(after ?? "").slice(1)}`.replace(/&$/, "");
+		return `"github:${name(source)}${query ? `?${query}` : ""}"`;
+	});
 }
 
 /**
