@@ -442,7 +442,7 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			});
 			const upload: RecordUpload = {
 				records: [...records.values()],
-				breakages: await fixBreakages(client, repository, pulls),
+				breakages: await fixBreakages({ client, repository, pulls }),
 			};
 			const response = await post(deps.fetch, endpoint, token, upload);
 			if (response.status === 401 || response.status === 403) {
@@ -484,6 +484,23 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 	if (notes.length) writeFailure(deps.env, notes.join("; "));
 	else rmSync(join(dir, "failure"), { force: true });
 	return sent;
+}
+
+/**
+ * `text` as epoch ms when it is an ISO 8601 date and time with an explicit `Z` or offset on a real calendar day, else
+ * null: `Date.parse` alone takes a bare date as UTC midnight, a time without an offset as this host's, and rolls an
+ * impossible day such as February 30 into the next month.
+ */
+export function parseInstant(text: string): number | null {
+	const match =
+		/^(\d{4})-(\d\d)-(\d\d)T([01]\d|2[0-3]):[0-5]\d(:[0-5]\d(\.\d+)?)?(Z|[+-]([01]\d|2[0-3]):[0-5]\d)$/.exec(text);
+	if (!match) return null;
+	const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+	const date = new Date(0);
+	date.setUTCFullYear(year, month - 1, day);
+	if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+	const at = Date.parse(text);
+	return Number.isNaN(at) ? null : at;
 }
 
 /** An incident to report, as a deploy or alert hands it to `quest records incident`. */

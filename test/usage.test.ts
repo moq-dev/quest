@@ -1174,10 +1174,16 @@ describe("usage", () => {
 	});
 
 	test("narrows to one PR, and reports the records alone without token-max", async () => {
-		const { root, deps, sessions } = setup();
+		const { root, deps, sessions, requests } = setup();
 		const one = await usage(root, { since: "2026-11-05", pr: 10 }, deps(sessions));
 		expect(one.pulls.map((p) => p.number)).toEqual([10]);
 		expect(one.pulls[0]!.fixedBy).toEqual([11]);
+		// Only #10's breakage is kept, and #11's other culprits, #2 and #99, are never read.
+		expect(one.breakages.map((b) => [b.culprit?.number, b.fix])).toEqual([[10, 11]]);
+		expect(requests.filter((path) => /\/pulls\/\d+$/.test(path))).toEqual([]);
+		// Narrowed to the fix, every culprit it names is kept.
+		const fix = await usage(root, { since: "2026-11-05", pr: 11 }, deps(sessions));
+		expect(fix.breakages.map((b) => b.culprit?.number)).toEqual([10, 2]);
 		expect(one.unattributed).toBeNull();
 		// The unreadable lines were an unattributed session's, which a narrowed report leaves out.
 		expect(one.incomplete).toEqual([]);

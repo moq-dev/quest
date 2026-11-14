@@ -6,7 +6,15 @@ import { expect, test } from "vitest";
 
 import { REFERENCE_LINE, parseUpload } from "../src/core";
 import { hook } from "../src/cli/hooks";
-import { type SendDependencies, queue, reportIncident, runSender, sendPass, tokensPath } from "../src/cli/send";
+import {
+	type SendDependencies,
+	parseInstant,
+	queue,
+	reportIncident,
+	runSender,
+	sendPass,
+	tokensPath,
+} from "../src/cli/send";
 import type { Session } from "../src/cli/usage";
 import { tempDir } from "./fixture";
 
@@ -613,4 +621,19 @@ test("a merged fix naming an open incident sends one record under the incident, 
 	expect(parseUpload(uploads[0]!.body).breakages.map((b) => [b.culprit?.number, b.fix, b.incident, b.found])).toEqual(
 		[[3, 9, "deploy 42", "canary"]],
 	);
+});
+
+test("an incident's --at must be a date and time with a Z or offset, on a real calendar day", () => {
+	expect(parseInstant("2026-11-06T10:00:00Z")).toBe(Date.parse("2026-11-06T10:00:00Z"));
+	expect(parseInstant("2026-11-06T10:00+02:00")).toBe(Date.parse("2026-11-06T08:00:00Z"));
+	expect(parseInstant("2024-02-29T10:00:00.5Z")).toBe(Date.parse("2024-02-29T10:00:00.500Z"));
+	for (const text of [
+		"2026-11-06",
+		"2026-11-06T10:00:00",
+		"2026-02-30T10:00:00Z",
+		"2026-11-06T24:00:00Z",
+		"2026-11-06T10:00:00+25:00",
+		"Nov 6 2026 10:00 UTC",
+	])
+		expect(parseInstant(text), text).toBeNull();
 });

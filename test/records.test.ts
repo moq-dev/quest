@@ -134,6 +134,8 @@ describe("parseBreakage", () => {
 			breakage({ fix: null, incident: "deploy 42", found: null }),
 			// A fix closing an incident.
 			breakage({ incident: "deploy 42" }),
+			// A leap day is a real one.
+			breakage({ at: "2024-02-29T10:00:00Z" }),
 		])
 			expect(parseBreakage(JSON.parse(JSON.stringify(sent)))).toEqual(sent);
 	});
@@ -151,6 +153,7 @@ describe("parseBreakage", () => {
 			"unknown field cost",
 		],
 		["a mixed-case repository", breakage({ repository: "Acme/proj" }), "lowercase"],
+		["an impossible calendar day", breakage({ at: "2026-02-30T10:00:00Z" }), "when it was found"],
 	])("refuses %s", (_, value, message) => {
 		expect(() => parseBreakage(value)).toThrow(message);
 	});

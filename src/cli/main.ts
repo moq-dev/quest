@@ -86,7 +86,15 @@ import {
 import { CHECKED_CONTEXT, USER_ASKED, questRoot } from "./rules";
 import { messageLines, messages } from "./messages";
 import { logWait, pullWaitKind, readWaits } from "./waits";
-import { CHECKOUT_CONFIG, SEND_INTERVAL, background, reportIncident, runSender, tokensPath } from "./send";
+import {
+	CHECKOUT_CONFIG,
+	SEND_INTERVAL,
+	background,
+	parseInstant,
+	reportIncident,
+	runSender,
+	tokensPath,
+} from "./send";
 import { installSender, uninstallSender } from "./service";
 import { heal, init, stubFindings, uninstall } from "./setup";
 import { Refusal, describe, notUpstream, releaseQuest, startQuest } from "./start";
@@ -1283,12 +1291,15 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 		)
 		.addOption(new Option("--found <by>", "Who or what found it").choices(FINDERS).makeOptionMandatory())
 		.option("--pr <number>", "The PR that caused it", positiveInteger("--pr"))
-		.option("--at <instant>", "When it was found, as an ISO 8601 instant (default: now)")
+		.option("--at <instant>", "When it was found, as an ISO 8601 date and time with a Z or offset (default: now)")
 		.action((id: string, options: { found: Finder; pr?: number; at?: string }) => {
 			if (/[\r\n]/.test(id) || id.trim() === "")
 				throw new UsageError("the incident ID must be one non-empty line");
-			const at = options.at === undefined ? Date.now() : Date.parse(options.at);
-			if (Number.isNaN(at)) throw new UsageError(`--at ${options.at} is not an ISO 8601 instant`);
+			const at = options.at === undefined ? Date.now() : parseInstant(options.at);
+			if (at === null)
+				throw new UsageError(
+					`--at ${options.at} is not an ISO 8601 date and time with a Z or offset, on a real calendar day`,
+				);
 			settle(
 				reportIncident(
 					{ cwd: root(), id, found: options.found, pull: options.pr ?? null, at },

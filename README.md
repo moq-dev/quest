@@ -1797,8 +1797,8 @@ sends the fix's breakage under the incident's ID, so it replaces the open one
 as one record holding the culprit, the fix, and the incident. Where several
 fixes name one incident, the one updated last wins. One fix closes several incidents of a
 culprit with a line for each. `--found` is one of `check`, `reviewer`, `queue`,
-`canary`, `person`, or `customer`, and `--at` sets when it was found, by
-default now. Reverts and red default-branch runs are not reported here: the
+`canary`, `person`, or `customer`, and `--at` sets when it was found, as
+an ISO 8601 date and time with a `Z` or offset, by default now. Reverts and red default-branch runs are not reported here: the
 store reads them from GitHub itself.
 
 ### Typed messages

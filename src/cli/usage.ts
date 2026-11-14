@@ -419,12 +419,22 @@ export async function readPull(client: GitHub, repository: Repository, number: n
 	return response.status === 404 ? null : pull(object(await response.json()));
 }
 
+/** What {@link fixBreakages} reads. */
+export interface FixSources {
+	client: GitHub;
+	repository: Repository;
+	pulls: Pull[];
+	/** The PRs a narrowed report shows; unset, every breakage. */
+	only?: Set<number>;
+}
+
 /**
  * A breakage for each culprit the merged PRs among `pulls` name under `## Caused by`, found when the fix opened, with
  * the incident its line closes. A culprit outside `pulls` is read from GitHub, once each; a link to no PR names no
  * culprit. An incident several lines close keeps the line of the fix updated last, so no body can send one twice.
+ * Given `only`, it keeps only the breakages whose fix or culprit `only` names.
  */
-export async function fixBreakages(client: GitHub, repository: Repository, pulls: Pull[]): Promise<BreakageRecord[]> {
+export async function fixBreakages({ client, repository, pulls, only }: FixSources): Promise<BreakageRecord[]> {
 	const known = new Map<number, Pull | null>(pulls.map((each) => [each.number, each]));
 	const breakages: BreakageRecord[] = [];
 	const seen = new Set<string>();
@@ -432,6 +442,8 @@ export async function fixBreakages(client: GitHub, repository: Repository, pulls
 	for (const fix of pulls.filter((each) => each.state === "merged"))
 		for (const cause of culprits(fix.body, repository)) {
 			if (cause.number === fix.number) continue;
+			// A narrowed report reads no culprit of a breakage it leaves out.
+			if (only && !only.has(fix.number) && !only.has(cause.number)) continue;
 			if (!known.has(cause.number)) known.set(cause.number, await readPull(client, repository, cause.number));
 			const culprit = known.get(cause.number);
 			if (!culprit) continue;
@@ -1072,10 +1084,12 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		// `quest ready` and hand edits drop the section before merge, so an earlier body counts too.
 		if (read?.bodies.some(handedBack)) row.handedBack = true;
 	}
-	const reported = new Set(rows.map((row) => row.number));
-	const breakages = (await fixBreakages(client, repository, all)).filter(
-		(each) => !narrowed || reported.has(each.fix!) || reported.has(each.culprit!.number),
-	);
+	const breakages = await fixBreakages({
+		client,
+		repository,
+		pulls: all,
+		only: narrowed ? new Set(rows.map((row) => row.number)) : undefined,
+	});
 	return {
 		repository: key(repository),
 		since: options.since,
