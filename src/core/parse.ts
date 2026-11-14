@@ -15,7 +15,12 @@ export function parser(what: string) {
 	const flag = (value: unknown, field: string): boolean => (typeof value === "boolean" ? value : fail(field));
 	const instant = (value: unknown, field: string): string => {
 		const at = text(value, field);
-		return /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(at) && !Number.isNaN(Date.parse(at)) ? at : fail(field);
+		const match = /^(\d{4})-(\d\d)-(\d\d)T\d\d:\d\d:\d\d(\.\d+)?Z$/.exec(at);
+		if (!match || Number.isNaN(Date.parse(at))) return fail(field);
+		const date = new Date(0);
+		date.setUTCFullYear(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+		const valid = date.getUTCMonth() === Number(match[2]) - 1 && date.getUTCDate() === Number(match[3]);
+		return valid ? at : fail(field);
 	};
 	const oneOf = <T extends string>(value: unknown, options: readonly T[], field: string): T =>
 		options.includes(value as T) ? (value as T) : fail(field);
