@@ -583,6 +583,9 @@ export function sessionRecords(sources: RecordSources): Map<Session, SessionReco
 /** A row of a session with no ID, by its host and transcript files, which no two sessions share. */
 const anonymous = new WeakMap<SessionRow, string>();
 
+/** One session across the PR rows it appears on. */
+const identity = (session: SessionRow) => JSON.stringify([session.harness, session.session ?? anonymous.get(session)]);
+
 function spendRows(pulls: PullRow[]): SpendRow[] {
 	const rows = new Map<string, SpendRow & { seen: Set<string> }>();
 	for (const each of pulls)
@@ -603,9 +606,8 @@ function spendRows(pulls: PullRow[]): SpendRow[] {
 					};
 					rows.set(id, row);
 				}
-				const key = JSON.stringify([session.harness, session.session ?? anonymous.get(session)]);
-				if (!row.seen.has(key)) row.sessions++;
-				row.seen.add(key);
+				if (!row.seen.has(identity(session))) row.sessions++;
+				row.seen.add(identity(session));
 				add(row, portion(session, spent));
 			}
 	const roles: readonly Role[] = ROLES;
@@ -880,6 +882,7 @@ function reviewerRows(pulls: PullRow[]): ReviewerRow[] {
  */
 function armRows(pulls: PullRow[]): ArmRow[] {
 	const rows = new Map<string, ArmRow>();
+	const seen = new Map<ArmRow, Set<string>>();
 	const latest = tallied(pulls, (each) => each.implementers.length > 0);
 	for (const each of pulls) {
 		const first = each.implementers[0];
@@ -893,9 +896,13 @@ function armRows(pulls: PullRow[]): ArmRow[] {
 			rows.set(id, row);
 		}
 		outcome(row, each, latest);
+		const counted = seen.get(row) ?? new Set<string>();
+		seen.set(row, counted);
 		for (const session of each.sessions) {
-			row.sessions++;
-			for (const spent of session.models) add(row.spend, spent);
+			// A session on several PRs of the arm, as a coordinator is, counts once, its shares adding up to its cost.
+			if (!counted.has(identity(session))) row.sessions++;
+			counted.add(identity(session));
+			for (const spent of shareOf(session)) add(row.spend, spent);
 		}
 	}
 	return [...rows.values()].sort((a, b) =>

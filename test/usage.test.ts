@@ -1036,6 +1036,20 @@ describe("usage", () => {
 					branches: [{ name: "quest/m0/b1", first: "2026-11-06T10:05:00Z", last: "2026-11-06T10:06:00Z" }],
 					cwd: "/b1",
 				}),
+				// A coordinator whose sub-agents worked on both arm-B PRs counts once there, at its whole cost.
+				exported("44444444-4444-4444-4444-444444444444", "claude-opus-5-5", "high", 4, {
+					branches: [],
+					cwd: "/c",
+				}),
+				...["b1", "b2"].map((branch, i) =>
+					exported(`5555555${i}-5555-5555-5555-555555555555`, "claude-opus-5-5", "high", 1, {
+						parent: "44444444-4444-4444-4444-444444444444",
+						branches: [
+							{ name: `quest/m0/${branch}`, first: "2026-11-06T10:05:00Z", last: "2026-11-06T10:06:00Z" },
+						],
+						cwd: `/${branch}`,
+					}),
+				),
 			],
 		});
 		const report = await usage(root, { since: "2026-11-05" }, deps(sessions));
@@ -1053,7 +1067,7 @@ describe("usage", () => {
 			]),
 		).toEqual([
 			["M", "A", "claude-opus-5-5", "medium", 1, 1, 2, 0, 0],
-			["M", "B", "claude-opus-5-5", "high", 2, 2, 4, 1, 3],
+			["M", "B", "claude-opus-5-5", "high", 2, 2, 4, 4, 9],
 		]);
 		const twenty = report.pulls.find((p) => p.number === 20)!;
 		expect(twenty.implementers.map((i) => i.arm)).toEqual(["B", "B"]);
@@ -1061,7 +1075,7 @@ describe("usage", () => {
 		expect(text).toContain("  implementer: Claude Code, claude-opus-5-5, high effort (XS, arm B)\n");
 		expect(text).toContain("Writer A/B by size and arm:\n");
 		expect(text).toContain(
-			"   M  B  Claude Code  claude-opus-5-5  high    2 PRs, 2 merged, 0 handed back, 2 reviewed: rounds 2.0, findings 2 (medium 2): fixed 2, refuted 0, open 0, first rounds 0: 0; 0 later fixes; 1 sessions, in 10, cache 20 written 30 read, out 40, ~$3.00\n",
+			"   M  B  Claude Code  claude-opus-5-5  high    2 PRs, 2 merged, 0 handed back, 2 reviewed: rounds 2.0, findings 2 (medium 2): fixed 2, refuted 0, open 0, first rounds 0: 0; 0 later fixes; 4 sessions, in 40, cache 80 written 120 read, out 160, ~$9.00\n",
 		);
 	});
 
