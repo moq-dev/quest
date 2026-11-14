@@ -122,7 +122,6 @@ export interface AccuracyRow {
 	fixes: number;
 }
 
-/** One online reviewer over the merged PRs reported. */
 /** The PRs of one risk tier, or of none (`tier` null): how many merged, how many a reviewer raised, and later fixed. */
 export interface TierRow {
 	tier: Tier | null;
@@ -134,6 +133,7 @@ export interface TierRow {
 	culprits: number;
 }
 
+/** One online reviewer over the merged PRs reported. */
 export interface OnlineRow {
 	reviewer: string;
 	/** Merged PRs reported, whether or not it reviewed them. */

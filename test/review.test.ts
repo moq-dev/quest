@@ -1056,7 +1056,7 @@ fakes("codex reviews read-only with the base's instructions, then reports in the
 	expect(second.stdin).toContain("Read no files and run no commands");
 	expect(second.stdin).toContain(head);
 	// The report turn gives the classified tier, which the reviewer may raise and never lower.
-	expect(second.stdin).toContain("the change was classified medium risk: the base has no RISK.md");
+	expect(second.stdin).toContain("<classified-reason>\nthe base has no RISK.md");
 	expect(second.stdin).toContain("Never report a lower tier.");
 	expect(first.stdin).not.toContain("classified");
 	const schema = second.argv[second.argv.indexOf("--output-schema") + 1];
@@ -1516,7 +1516,7 @@ fakes(
 		);
 		// The reviewer is told the tier it may raise.
 		expect(at(s.calls(), "high").at(-1)!.stdin).toContain(
-			"the change was classified low risk: Only a constant changes.",
+			"<classified-reason>\nOnly a constant changes.\n</classified-reason>",
 		);
 
 		// The same head and risk file reuse the tier, so no model runs again.
