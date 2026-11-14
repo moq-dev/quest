@@ -1634,8 +1634,9 @@ export async function classify(input: Classifying): Promise<{ key: string; value
 		prompt,
 		who: "classifier",
 		task: "set the risk tier",
+		parse: (value) => assessment(value, "the classifier's reply"),
 	});
-	const { tier, reason } = assessment(answer.value, "the classifier's reply");
+	const { tier, reason } = answer.value;
 	return {
 		key,
 		value: {
@@ -1648,7 +1649,7 @@ export async function classify(input: Classifying): Promise<{ key: string; value
 }
 
 /** A one-turn question to a model in a new session, answered in `schema`. */
-export interface Question {
+export interface Question<T = unknown> {
 	/** Where its CLI runs, and where the schema file is saved. */
 	cwd: string;
 	dir: string;
@@ -1662,23 +1663,30 @@ export interface Question {
 	/** Who answers and what for, as `classifier` and `set the risk tier`, for errors. */
 	who: string;
 	task: string;
+	/** The reply's value, throwing when it is unusable, which passes the question to the next model. */
+	parse(value: unknown): T;
 }
 
-/** A question's answer: the model that gave it, its session, the parsed reply, and the tokens it reported. */
-export interface Answer {
+/**
+ * A question's answer: the model that gave it, its session, the parsed reply, and the tokens it reported, with every
+ * turn that replied, unusable ones first, so a caller can count what the question cost.
+ */
+export interface Answer<T = unknown> {
 	entry: Model;
 	session: string;
-	value: unknown;
+	value: T;
 	usage: Omit<Usage, "turn"> | null;
+	spent: { entry: Model; usage: Omit<Usage, "turn"> | null }[];
 }
 
 /**
  * Ask the first of `entries` that can run: one that is logged out, has its login rejected, or hit its usage limit
  * passes the question to the next, since each answers the same prompt.
  */
-export async function ask(entries: readonly Model[], question: Question): Promise<Answer> {
+export async function ask<T>(entries: readonly Model[], question: Question<T>): Promise<Answer<T>> {
 	const schemaFile = saveSchema(question.dir, question.schema);
 	const failures: (ReviewInputError | ReviewLimitError)[] = [];
+	const spent: Answer<T>["spent"] = [];
 	for (const entry of entries) {
 		let reply: Reply;
 		try {
@@ -1705,14 +1713,18 @@ export async function ask(entries: readonly Model[], question: Question): Promis
 			failures.push(error);
 			continue;
 		}
-		if (reply.session === undefined)
-			throw new Error(`${entry.harness} did not report the ${question.who}'s session`);
-		return {
-			entry,
-			session: reply.session,
-			value: replied(reply, `the ${question.who}'s reply`),
-			usage: reported(reply.usage) ? reply.usage : null,
-		};
+		const usage = reported(reply.usage) ? reply.usage : null;
+		spent.push({ entry, usage });
+		// A model that answered with no session, or unusably, passes the question on like one that could not run.
+		let value: T;
+		try {
+			if (reply.session === undefined) throw new Error(`it did not report the ${question.who}'s session`);
+			value = question.parse(replied(reply, `the ${question.who}'s reply`));
+		} catch (error) {
+			failures.push(new ReviewInputError(`${entry.harness} ${entry.model}: ${(error as Error).message}`));
+			continue;
+		}
+		return { entry, session: reply.session!, value, usage, spent };
 	}
 	throw unanswered(failures, question);
 }
@@ -1721,7 +1733,7 @@ export async function ask(entries: readonly Model[], question: Question): Promis
  * Why no model answered: the usage limit that resets first when every one hit its own, so a caller waits for the
  * earliest, else each model's reason.
  */
-function unanswered(failures: (ReviewInputError | ReviewLimitError)[], { who, task }: Question): Error {
+function unanswered(failures: (ReviewInputError | ReviewLimitError)[], { who, task }: Question<unknown>): Error {
 	const limits = failures.filter((each) => each instanceof ReviewLimitError);
 	if (limits.length > 0 && limits.length === failures.length)
 		return limits.sort((a, b) => (a.until ?? Infinity) - (b.until ?? Infinity))[0]!;

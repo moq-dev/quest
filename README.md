@@ -1791,15 +1791,20 @@ measured, never judged. Each stretch of the transcript goes to the step it
 ends at, less the part a timed wait covers, so the categories and the timed
 waits sum to the transcript's span and the categories' tokens to its tokens,
 whatever the model judges. Each part also gets one line on what went wrong,
-if anything did. About one part in ten is labeled again by a stronger model,
-Claude Sonnet at medium else `gpt-6.1-sol` at medium, and the split reports
-the time the two labeled differently, so the classifier has a known error.
-The split's `usage` is what labeling took, by model.
+if anything did, cut to 300 characters. A reply that is not labels covering
+every step of its part passes the part to the next model. About one part in
+ten is labeled again by a stronger model, Claude Sonnet at medium else
+`gpt-6.1-sol` at medium, and the split reports the time the two labeled
+differently, so the classifier has a known error; a check no model could give
+leaves its part unchecked. The split's `usage` is what labeling took, by model,
+unusable replies included.
 
 The labels are kept under `$XDG_STATE_HOME/quest/records/splits`, so each stop
 labels only the new steps, and `quest usage` reads them without asking a model.
-The transcript text reaches only the labeling model, never the store. A failure
-to label, such as every model logged out, fails the pass like a failed upload.
+The transcript text reaches only the labeling model, never the store. Labeling
+never holds a record back: a session no model could label, such as with every
+model logged out, is sent without its split, the next stop says why, and the
+session's next stop labels the steps still unlabeled.
 
 ### Typed messages
 

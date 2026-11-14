@@ -16,7 +16,7 @@ import {
 } from "../core";
 import { eachLine, parseLine } from "./messages";
 import { type Model, SPLITTERS, SPLIT_CHECKERS } from "./models";
-import type { Answer, Question } from "./review";
+import { type Answer, type Question, ReviewInputError, ReviewLimitError } from "./review";
 
 /** The categories a model may pick; `idle` is measured, never judged. */
 export const LABELS = SPLIT_CATEGORIES.filter((c) => c !== "idle") as Exclude<SplitCategory, "idle">[];
@@ -408,8 +408,11 @@ export const SPLIT_SCHEMA = {
 	},
 } as const;
 
-/** The labels and note a reply holds for `part`, failing unless its ranges cover each action exactly once. */
-export function parseLabels(value: unknown, part: { from: number; to: number }): { labels: Label[]; note: string } {
+/**
+ * The labels and note a reply holds for `part`, its note cut to one line of at most {@link NOTE_LIMIT} characters,
+ * failing unless its ranges cover each action exactly once.
+ */
+export function parseLabels(value: unknown, part: { from: number; to: number }): Parsed {
 	const fail = (what: string): never => {
 		throw new Error(`the time splitter's reply ${what}`);
 	};
@@ -430,10 +433,12 @@ export function parseLabels(value: unknown, part: { from: number; to: number }):
 		for (let i = from; i <= (to as number); i++) labels.push(range.category as Label);
 	}
 	if (labels.length !== part.to - part.from) fail(`does not cover actions #${part.from} to #${part.to - 1}`);
-	const note = oneLine(value.note, NOTE_LIMIT + 1);
-	if (note.length > NOTE_LIMIT) fail("has a note longer than one line");
-	return { labels, note };
+	// The prompt asks for under 25 words; a longer note is cut rather than costing its part's labels.
+	return { labels, note: oneLine(value.note, NOTE_LIMIT) };
 }
+
+/** A part's labels and its note. */
+type Parsed = { labels: Label[]; note: string };
 
 /** Whether a stronger model labels the part from `from` again: about one part in ten, the same on every read. */
 export function sampled(harness: string, session: string, from: number): boolean {
@@ -442,22 +447,25 @@ export function sampled(harness: string, session: string, from: number): boolean
 
 /** What labeling needs: a way to ask a model, and where its CLI runs. */
 export interface SplitDependencies {
-	ask(entries: readonly Model[], question: Question): Promise<Answer>;
+	ask<T>(entries: readonly Model[], question: Question<T>): Promise<Answer<T>>;
 	/** The sender's state directory, which keeps the labels and runs the CLIs. */
 	state: string;
 	env: NodeJS.ProcessEnv;
 }
 
-function addUsage(usage: SplitUsage[], answer: Answer): void {
-	const { harness, model, effort } = answer.entry;
-	let row = usage.find((u) => u.harness === harness && u.model === model && u.effort === effort);
-	if (!row) {
-		row = { harness, model, effort, input: 0, cached: 0, output: 0 };
-		usage.push(row);
+/** Add every turn that answered, unusable ones included, to `usage` by model. */
+function addUsage(usage: SplitUsage[], answer: Answer<unknown>): void {
+	for (const turn of answer.spent) {
+		const { harness, model, effort } = turn.entry;
+		let row = usage.find((u) => u.harness === harness && u.model === model && u.effort === effort);
+		if (!row) {
+			row = { harness, model, effort, input: 0, cached: 0, output: 0 };
+			usage.push(row);
+		}
+		row.input += turn.usage?.input ?? 0;
+		row.cached += turn.usage?.cached ?? 0;
+		row.output += turn.usage?.output ?? 0;
 	}
-	row.input += answer.usage?.input ?? 0;
-	row.cached += answer.usage?.cached ?? 0;
-	row.output += answer.usage?.output ?? 0;
 }
 
 /**
@@ -472,7 +480,7 @@ export async function labelSession(
 ): Promise<Labeled> {
 	const path = labelsPath(deps.state, harness, session);
 	const labeled = readLabeled(path, steps.actions) ?? unlabeled();
-	const question = (prompt: string, who: string): Question => ({
+	const question = (prompt: string, who: string, part: { from: number; to: number }): Question<Parsed> => ({
 		cwd: deps.state,
 		dir: deps.state,
 		env: deps.env,
@@ -482,16 +490,24 @@ export async function labelSession(
 		tools: "",
 		who,
 		task: "split the session's time",
+		// An unusable reply passes the part to the next model.
+		parse: (value) => parseLabels(value, part),
 	});
 	for (const part of parts(steps, labeled.labels.length)) {
 		const prompt = splitPrompt(steps, part);
-		const answer = await deps.ask(SPLITTERS, question(prompt, "time splitter"));
-		const { labels, note } = parseLabels(answer.value, part);
+		const answer = await deps.ask(SPLITTERS, question(prompt, "time splitter", part));
+		const { labels, note } = answer.value;
 		addUsage(labeled.usage, answer);
 		if (sampled(harness, session, part.from)) {
-			const check = await deps.ask(SPLIT_CHECKERS, question(prompt, "time split checker"));
-			labeled.checks.push({ from: part.from, labels: parseLabels(check.value, part).labels });
-			addUsage(labeled.usage, check);
+			// The check only measures the splitter, so a check no model could give leaves the part unchecked
+			// rather than costing the labels already paid for.
+			try {
+				const check = await deps.ask(SPLIT_CHECKERS, question(prompt, "time split checker", part));
+				labeled.checks.push({ from: part.from, labels: check.value.labels });
+				addUsage(labeled.usage, check);
+			} catch (error) {
+				if (!(error instanceof ReviewInputError || error instanceof ReviewLimitError)) throw error;
+			}
 		}
 		labeled.labels.push(...labels);
 		if (note !== "") labeled.notes.push(note);

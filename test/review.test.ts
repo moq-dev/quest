@@ -147,7 +147,7 @@ if (argv.includes("--session-id") && argv.includes("--json-schema")) {
 		result({ session_id: at("--session-id"), is_error: true, result: "You've hit your weekly limit · resets Nov 5, 3pm (UTC)" });
 		process.exit(1);
 	}
-	const reply = ${RISK_REPLY};
+	const reply = failing.includes("claude-unusable") ? JSON.stringify({ tier: "huge", reason: "x" }) : ${RISK_REPLY};
 	result({
 		session_id: at("--session-id"),
 		result: reply,
@@ -232,7 +232,7 @@ if (argv[1] === "review") {
 		event({ type: "turn.failed", error: { message } });
 		process.exit(1);
 	}
-	message(${RISK_REPLY});
+	message(failing.includes("codex-unusable") ? "not JSON" : ${RISK_REPLY});
 	event({ type: "turn.completed", usage: { input_tokens: 40, cached_input_tokens: 0, output_tokens: 3 } });
 } else {
 	event({ type: "thread.started", thread_id: argv[argv.length - 2] });
@@ -1584,7 +1584,7 @@ fakes("without a logged-in Claude Code, Codex classifies", async () => {
 });
 
 fakes(
-	"a classifier whose turn fails on its login or usage limit passes the turn to the next",
+	"a classifier whose turn fails on its login or usage limit, or replies unusably, passes the turn to the next",
 	async () => {
 		const s = setup();
 		moveBase(s.repo, (dir) => write(dir, "RISK.md", riskFile([])));
@@ -1593,7 +1593,8 @@ fakes(
 			vi.stubEnv("FAKE_CLASSIFY", failing);
 			return quest("--root", s.repo, "review", "--new");
 		};
-		for (const failing of ["claude-rejected", "claude-limited"]) {
+		// An unusable reply passes the turn on too.
+		for (const failing of ["claude-rejected", "claude-limited", "claude-unusable"]) {
 			const passed = await run(failing);
 			expect(passed.code, passed.stderr).toBe(0);
 			expect(passed.stdout).toContain("classifier codex gpt-6.1-sol low thread-classify\n");
@@ -1609,6 +1610,11 @@ fakes(
 		expect(failed.code).toBe(2);
 		expect(failed.stderr).toMatch(
 			/^error: no classifier could set the risk tier: claude is not logged in .*; codex hit its usage limit; resets /,
+		);
+		const unusable = await run("claude-unusable,codex-unusable");
+		expect(unusable.code).toBe(2);
+		expect(unusable.stderr).toBe(
+			"error: no classifier could set the risk tier: claude claude-haiku-5-5: the classifier's reply has no risk tier with a reason; codex gpt-6.1-sol: the classifier's reply is not JSON\n",
 		);
 	},
 	20_000,

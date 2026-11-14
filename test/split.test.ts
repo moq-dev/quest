@@ -3,14 +3,13 @@ import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
 
-import { SPLIT_CATEGORIES, type SessionRecord, type SessionWait, parseRecord } from "../src/core";
+import { NOTE_LIMIT, SPLIT_CATEGORIES, type SessionRecord, type SessionWait, parseRecord } from "../src/core";
 import { SPLITTERS, SPLIT_CHECKERS, type Model } from "../src/cli/models";
-import type { Answer, Question } from "../src/cli/review";
+import { type Answer, type Question, ReviewInputError, ReviewLimitError } from "../src/cli/review";
 import {
 	type Labeled,
 	keptSplit,
 	labelSession,
-	labelsPath,
 	parseLabels,
 	parts,
 	readSteps,
@@ -167,6 +166,30 @@ describe("readSteps", () => {
 	});
 });
 
+/** A valid record with a split. */
+const base = (): SessionRecord => ({
+	harness: "claude",
+	session: "s1",
+	parent: null,
+	repository: "acme/proj",
+	branch: null,
+	quest: null,
+	pulls: [],
+	role: "implementing",
+	models: [],
+	cost: 0,
+	complete: true,
+	start: at(0),
+	end: at(1),
+	waits: [],
+	split: {
+		categories: Object.fromEntries(SPLIT_CATEGORIES.map((c) => [c, { ms: 1, tokens: 2 }])) as never,
+		notes: ["one line"],
+		check: { ms: 5, disagreed: 1 },
+		usage: [{ harness: "claude", model: "claude-haiku-5-5", effort: "low", input: 10, cached: 4, output: 1 }],
+	},
+});
+
 describe("parseLabels", () => {
 	const part = { from: 3, to: 6 };
 	test("expands ranges that cover the part in order", () => {
@@ -208,13 +231,17 @@ describe("parseLabels", () => {
 		).toThrow("time splitter's reply");
 	});
 
-	test("refuses idle, which is measured, and a note past its limit", () => {
+	test("refuses idle, which is measured, and cuts a note past its limit", () => {
 		expect(() => parseLabels({ ranges: [{ from: 3, to: 5, category: "idle" }], note: "" }, part)).toThrow(
 			"without a category",
 		);
-		expect(() =>
-			parseLabels({ ranges: [{ from: 3, to: 5, category: "other" }], note: "x".repeat(400) }, part),
-		).toThrow("longer than one line");
+		const { labels, note } = parseLabels(
+			{ ranges: [{ from: 3, to: 5, category: "other" }], note: "x".repeat(400) },
+			part,
+		);
+		expect(labels).toEqual(["other", "other", "other"]);
+		expect(note).toHaveLength(NOTE_LIMIT);
+		expect(() => parseRecord({ ...base(), split: { ...base().split!, notes: [note] } })).not.toThrow();
 	});
 });
 
@@ -266,18 +293,24 @@ describe("splitOf", () => {
 	});
 });
 
-/** A fake model that labels every action of a part `label`, recording which list and prompt it was asked. */
-function fakeAsk(label = "writing") {
+/**
+ * A fake model that labels every action of a part `label`, parsing its reply as `ask` does, recording which list and
+ * prompt it was asked; with `checkerFails`, every checker is at its usage limit.
+ */
+function fakeAsk(label = "writing", checkerFails = false) {
 	const asked: { entries: readonly Model[]; prompt: string }[] = [];
-	const ask = async (entries: readonly Model[], question: Question): Promise<Answer> => {
+	const ask = async <T>(entries: readonly Model[], question: Question<T>): Promise<Answer<T>> => {
 		asked.push({ entries, prompt: question.prompt });
 		expect(question.tools).toBe("");
+		if (checkerFails && entries === SPLIT_CHECKERS) throw new ReviewLimitError("claude", null, entries[0]!.model);
 		const [, from, to] = /Label every numbered action from #(\d+) to #(\d+)/.exec(question.prompt)!;
+		const usage = { input: 100, cached: 40, output: 10 };
 		return {
 			entry: entries[0]!,
 			session: "x",
-			value: { ranges: [{ from: Number(from), to: Number(to), category: label }], note: "" },
-			usage: { input: 100, cached: 40, output: 10 },
+			value: question.parse({ ranges: [{ from: Number(from), to: Number(to), category: label }], note: "" }),
+			usage,
+			spent: [{ entry: entries[0]!, usage }],
 		};
 	};
 	return { ask, asked };
@@ -347,6 +380,20 @@ describe("labelSession", () => {
 		expect(labeled.usage.map((u) => u.model)).toEqual([SPLITTERS[0]!.model, SPLIT_CHECKERS[0]!.model]);
 	});
 
+	test("a check no model could give leaves the part unchecked, keeping its labels", async () => {
+		const path = claudeTranscript();
+		let id = 0;
+		while (!sampled("claude", `s${id}`, 0)) id++;
+		const state = tempDir();
+		const { ask, asked } = fakeAsk("writing", true);
+		const labeled = await labelSession("claude", `s${id}`, readSteps("claude", [path]), { ask, state, env: {} });
+		expect(asked.map((a) => a.entries)).toEqual([SPLITTERS, SPLIT_CHECKERS]);
+		expect([labeled.labels.length, labeled.checks]).toEqual([3, []]);
+		expect(
+			keptSplit(state, { harness: "claude", id: `s${id}`, files: [path], skippedLines: 0 }, [])?.check,
+		).toBeNull();
+	});
+
 	test("a transcript token-max could not read all of has no split", async () => {
 		const state = tempDir();
 		const path = claudeTranscript();
@@ -356,21 +403,18 @@ describe("labelSession", () => {
 		expect(keptSplit(state, { harness: "claude", id: "s1", files: [path], skippedLines: 1 }, [])).toBeNull();
 	});
 
-	test("a malformed reply fails, keeping no label", async () => {
+	test("a part no model could label usably fails, keeping no label", async () => {
 		const state = tempDir();
-		const ask = async (entries: readonly Model[]): Promise<Answer> => ({
-			entry: entries[0]!,
-			session: "x",
-			value: { ranges: [], note: "" },
-			usage: null,
-		});
+		// As `ask` throws once every model replied unusably.
+		const ask = async (): Promise<never> => {
+			throw new ReviewInputError("no time splitter could split the session's time: unusable");
+		};
 		await expect(
 			labelSession("claude", "s1", readSteps("claude", [claudeTranscript()]), { ask, state, env: {} }),
-		).rejects.toThrow("does not cover");
+		).rejects.toThrow("no time splitter");
 		expect(
 			keptSplit(state, { harness: "claude", id: "s1", files: [claudeTranscript()], skippedLines: 0 }, []),
 		).toBeNull();
-		expect(labelsPath(state, "claude", "s1")).toContain("splits");
 	});
 });
 
@@ -403,29 +447,6 @@ test("parts split a long session within the budget, and each prompt names its ra
 });
 
 describe("parseRecord's split", () => {
-	const base = (): SessionRecord => ({
-		harness: "claude",
-		session: "s1",
-		parent: null,
-		repository: "acme/proj",
-		branch: null,
-		quest: null,
-		pulls: [],
-		role: "implementing",
-		models: [],
-		cost: 0,
-		complete: true,
-		start: at(0),
-		end: at(1),
-		waits: [],
-		split: {
-			categories: Object.fromEntries(SPLIT_CATEGORIES.map((c) => [c, { ms: 1, tokens: 2 }])) as never,
-			notes: ["one line"],
-			check: { ms: 5, disagreed: 1 },
-			usage: [{ harness: "claude", model: "claude-haiku-5-5", effort: "low", input: 10, cached: 4, output: 1 }],
-		},
-	});
-
 	test("round-trips a valid split", () => {
 		expect(parseRecord(base())).toEqual(base());
 	});

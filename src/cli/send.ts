@@ -425,21 +425,28 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 				}
 			}
 			if (emit.size === 0) continue;
-			// Each session's new steps are labeled before its record is built, so every record carries its split.
+			// Each session's new steps are labeled before its record is built, so its record carries its split.
 			const labeled = new Map<Session, { steps: Steps; labeled: Labeled }>();
 			for (const s of emit) {
 				// A transcript with lines token-max could not read either is sent unsplit, as it is sent without waits.
 				if (s.id === null || s.host !== null || s.skippedLines > 0) continue;
-				let steps: Steps;
+				// Labeling never holds a record back: a session whose transcript reads in a shape quest does not know, or
+				// that no model could label, is sent unsplit and said, and its next stop tries the parts still unlabeled.
 				try {
-					steps = readSteps(s.harness, s.files);
+					const steps = readSteps(s.harness, s.files);
+					const labels = await labelSession(s.harness, s.id, steps, {
+						ask: deps.ask,
+						state: dir,
+						env: deps.env,
+					});
+					labeled.set(s, { steps, labeled: labels });
 				} catch (error) {
-					// A transcript deleted since token-max read it leaves the record without a split.
+					// A transcript deleted since token-max read it has no split to say.
 					if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-					throw error;
+					notes.push(
+						`${s.harness} session ${s.id} was sent without its time split: ${error instanceof Error ? error.message : String(error)}`,
+					);
 				}
-				const labels = await labelSession(s.harness, s.id, steps, { ask: deps.ask, state: dir, env: deps.env });
-				labeled.set(s, { steps, labeled: labels });
 			}
 			const records = sessionRecords({
 				repository: key(repository),
