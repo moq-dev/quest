@@ -355,12 +355,14 @@ describe("PR records", () => {
 			model: "claude-opus-5-5",
 			effort: "low",
 			size: "XS",
+			arm: null,
 		});
 		expect(implementer("Implementer: Codex, gpt-6.1-sol, unknown effort")).toEqual({
 			harness: "Codex",
 			model: "gpt-6.1-sol",
 			effort: "unknown",
 			size: null,
+			arm: null,
 		});
 		expect(implementer("Implementer: someone")).toBeNull();
 	});
@@ -384,7 +386,8 @@ describe("usage", () => {
 		...extra,
 	});
 
-	function setup() {
+	/** The fixture repository and its PRs and sessions, with `more` PRs and exported sessions besides. */
+	function setup(more: { pulls?: object[]; sessions?: object[] } = {}) {
 		const dir = tempDir();
 		const root = join(dir, "repo");
 		mkdirSync(root);
@@ -442,6 +445,7 @@ describe("usage", () => {
 				cwd: "/both",
 				repositories: ["https://github.com/fork/proj.git", "https://github.com/acme/proj.git"],
 			}),
+			...(more.sessions ?? []),
 		);
 
 		const body10 = [
@@ -489,7 +493,9 @@ describe("usage", () => {
 		const body11 =
 			"Fix.\n\n## Caused by\n\n- [acme/proj#10](https://github.com/acme/proj/pull/10) - missed a case\n";
 		// A closed duplicate of #11's fix: it never landed, so it fixed nothing.
+		// Newest updated first, as GitHub lists them, so the report stops at #8.
 		const pulls = [
+			...(more.pulls ?? []),
 			pr(11, "fix/a", body11, "2026-11-06T20:00:00Z"),
 			pr(10, "quest/m0/a", body10, "2026-11-06T10:00:00Z"),
 			// The same branch's earlier claim, closed before any session reached the branch.
@@ -669,9 +675,9 @@ describe("usage", () => {
 		expect(report.folded).toEqual({ copies: 1, hosts: ["box"] });
 		expect(report.incomplete).toEqual([{ host: null, harness: "claude", session: GONE, skippedLines: 2 }]);
 		expect(ten.implementers).toEqual([
-			{ harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: null },
-			{ harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: "L" },
-			{ harness: "Codex", model: "gpt-6.1-sol", effort: "medium", size: "S" },
+			{ harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: null, arm: null },
+			{ harness: "Claude Code", model: "claude-opus-5-5", effort: "high", size: "L", arm: null },
+			{ harness: "Codex", model: "gpt-6.1-sol", effort: "medium", size: "S", arm: null },
 		]);
 		expect(ten.unread).toEqual(["Implementer: Claude Code, Some Model"]);
 		expect(usageLines(report)).toContain("  unread: Implementer: Claude Code, Some Model");
@@ -778,6 +784,91 @@ describe("usage", () => {
 		expect(text).toContain(`  local  claude  ${GONE}  2 unreadable lines`);
 		expect(text).not.toContain("SECRET");
 		expect(JSON.stringify(report)).not.toContain("SECRET");
+	});
+
+	test("rolls up the writer A/B by size and arm, leaving out a PR a writer ran off its arm", async () => {
+		const models = (...lines: string[]) =>
+			[
+				"## Models",
+				"",
+				...lines,
+				"",
+				"## Review",
+				"",
+				"Rewritten by `quest review` after each round.",
+				"",
+				"- Reviewer: Codex, gpt-6.1-sol, high effort",
+				"- Score: 8/10, `Ok.`",
+				"- Rounds: 2; findings 1 (medium 1): fixed 1, refuted 0, open 0",
+				"",
+			].join("\n");
+		const armed = (number: number, branch: string, ...lines: string[]) =>
+			pr(number, branch, models(...lines), "2026-11-06T00:00:00Z", { updated_at: "2026-11-06T00:00:00Z" });
+		const { root, deps, sessions } = setup({
+			pulls: [
+				armed(
+					20,
+					"quest/m0/b1",
+					"- Size: M",
+					"- Implementer: Claude Code, claude-opus-5-5, high effort (arm B)",
+					"- Implementer: Claude Code, claude-opus-5-5, high effort (iterate, XS, arm B)",
+				),
+				armed(
+					21,
+					"quest/m0/b2",
+					"- Size: M",
+					"- Implementer: Claude Code, claude-opus-5-5, high effort (arm B)",
+				),
+				armed(
+					22,
+					"quest/m0/a1",
+					"- Size: M",
+					"- Implementer: Claude Code, claude-opus-5-5, medium effort (arm A)",
+				),
+				// A fallback to Sol names no arm, and an iterate naming the other arm, so neither PR counts.
+				armed(23, "quest/m0/off", "- Size: M", "- Implementer: Codex, gpt-6.1-sol, high effort"),
+				armed(
+					24,
+					"quest/m0/mixed",
+					"- Size: M",
+					"- Implementer: Claude Code, claude-opus-5-5, high effort (arm B)",
+					"- Implementer: Claude Code, claude-opus-5-5, medium effort (iterate, M, arm A)",
+				),
+				// An unsized PR has no cell to count in.
+				armed(25, "quest/m0/unsized", "- Implementer: Claude Code, claude-opus-5-5, high effort (arm B)"),
+			],
+			sessions: [
+				exported("33333333-3333-3333-3333-333333333333", "claude-opus-5-5", "high", 3, {
+					branches: [{ name: "quest/m0/b1", first: "2026-11-06T10:05:00Z", last: "2026-11-06T10:06:00Z" }],
+					cwd: "/b1",
+				}),
+			],
+		});
+		const report = await usage(root, { since: "2026-11-05" }, deps(sessions));
+		expect(
+			report.arms.map((a) => [
+				a.size,
+				a.arm,
+				a.model,
+				a.effort,
+				a.pulls,
+				a.reviewed,
+				a.tally.rounds,
+				a.sessions,
+				a.spend.cost,
+			]),
+		).toEqual([
+			["M", "A", "claude-opus-5-5", "medium", 1, 1, 2, 0, 0],
+			["M", "B", "claude-opus-5-5", "high", 2, 2, 4, 1, 3],
+		]);
+		const twenty = report.pulls.find((p) => p.number === 20)!;
+		expect(twenty.implementers.map((i) => i.arm)).toEqual(["B", "B"]);
+		const text = usageLines(report).join("\n");
+		expect(text).toContain("  implementer: Claude Code, claude-opus-5-5, high effort (XS, arm B)\n");
+		expect(text).toContain("Writer A/B by size and arm:\n");
+		expect(text).toContain(
+			"   M  B  Claude Code  claude-opus-5-5  high    2 PRs, 2 merged, 0 handed back, 2 reviewed: rounds 2.0, findings 2 (medium 2): fixed 2, refuted 0, open 0; 0 later fixes; 1 sessions, in 10, cache 20 written 30 read, out 40, ~$3.00\n",
+		);
 	});
 
 	test("a folded copy still names its directory's repository, and a session's gaps reach each model", async () => {

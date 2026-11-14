@@ -132,14 +132,15 @@ $ quest --root examples/export unblocked
 1	quest/m0/export.md
 
 $ quest --root examples/export unblocked --json --limit 1
-[{"path":"quest/m0/export.md","dependents":1,"hosts":[],"models":[{"harness":"claude","model":"claude-opus-5-5","effort":"medium"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
+[{"path":"quest/m0/export.md","dependents":1,"hosts":[],"arm":"B","models":[{"harness":"claude","model":"claude-sonnet-5-5","effort":"high"},{"harness":"claude","model":"claude-opus-5-5","effort":"medium"},{"harness":"codex","model":"gpt-6.1-sol","effort":"medium"}]}]
 ```
 
 Each plain output line contains the count, a tab, and the path. On a terminal,
 a heading explains the count. `--json` prints an ordered array, including `[]`
 when no quests are ready, and gives each quest the `hosts` its `## Hosts`
-section names (empty when it runs anywhere) and the ranked `models` that write
-it, as [Route work by size](#route-work-by-size) describes; `--limit <count>`
+section names (empty when it runs anywhere), its writer A/B `arm`, and the
+ranked `models` that write it, as [Route work by size](#route-work-by-size)
+describes; `--limit <count>`
 requires a positive integer.
 Invalid trees fail with diagnostics and no ranking.
 `quest-run` uses the ranking unless you explicitly select work in another order.
@@ -1265,6 +1266,17 @@ to the next only while nothing is written: when the CLI is missing or logged
 out, or the agent stops at its usage limit with nothing beyond the claim
 commit. Once a model writes, the PR is its own.
 
+While the writer A/B runs, XS, S, M, and XL quests split 50/50 between two
+arms, to measure where published guidance disagrees: arm A runs the table's
+writer, and arm B runs Claude Code `claude-opus-5-5` medium for XS,
+`claude-sonnet-5-5` high for S, `claude-opus-5-5` high for M, and
+`claude-fable-5-2` medium for XL. A hash of the quest's path picks the arm,
+so a restart or respawn keeps it; `quest unblocked --json` names it as `arm`,
+`A`, `B`, or `null` for L, and puts its entry first in `models`. The agent
+that runs that entry ends its `Implementer:` line with the arm, as
+`Implementer: Claude Code, claude-opus-5-5, high effort (arm B)`; a fallback
+names none, so its PR counts in neither arm.
+
 A `/quest-iterate` stays on the PR's writer, the model its `## Models`
 record's first `Implementer:` line names, so the other model can always
 review it. The coordinator dispatching it sizes the work left on the PR, not
@@ -1282,7 +1294,9 @@ claude	claude-opus-5-5	medium
 
 `--writer` prints the size's entry for that model, or else its entry at the
 nearest size that lists it, the larger on a tie; a model no list names is an
-error. `--json` prints an array of `{harness, model, effort}` objects. The
+error. An iterate on a PR whose first `Implementer:` line names an arm runs
+that arm's entry at the PR's size instead, as `quest models M --arm B`
+prints, and records it as `(iterate, XS, arm B)`. `--json` prints an array of `{harness, model, effort}` objects. The
 iterate records the size it was given in its `Implementer:` line, as
 `Implementer: Claude Code, claude-opus-5-5, medium effort (iterate, XS)`, so
 the model check can audit the routing. `quest review` still reviews the
@@ -1540,7 +1554,9 @@ findings measure an effort step rather than the writer. Since a branch's tallies
 PR whose record holds its latest tally, by the most rounds and then the newest,
 counts them, and a record written before tallies
 counts as unreviewed. An `Implementer:` line's own size, as
-`(iterate, XS)`, counts over the PR's; and, over the merged PRs, each online
+`(iterate, XS)`, counts over the PR's; the writer A/B by size and arm, with
+the same outcomes and every session's spend, counting a sized PR only when
+each of its `Implementer:` lines names the same arm; and, over the merged PRs, each online
 reviewer's coverage, final heads reviewed, findings per PR reviewed, and
 answers. Sessions on no PR here, from any
 repository or agent token-max reads, total on an `Unattributed` line. `--pr` and

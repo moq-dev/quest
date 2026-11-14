@@ -46,7 +46,7 @@ Decided 2026-11-11 (user, /quest-plan in a /quest-run session, when picking
 
 The benchmarks behind the XS writer change to Sonnet 5.5 high
 ([moq-dev/quest#646](https://github.com/moq-dev/quest/pull/646)) and the XS
-arm of the [writer A/B](/quest/m0/routing-evidence/writer-ab.md)
+arm of the writer A/B ([moq-dev/quest#720](https://github.com/moq-dev/quest/pull/720))
 ([moq-dev/quest#644](https://github.com/moq-dev/quest/pull/644)), both
 decided on 2026-11-11, for the first table:
 

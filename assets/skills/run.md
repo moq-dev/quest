@@ -27,6 +27,7 @@ Skip a quest a match already implements; one that only touches the same files is
 Each agent runs `/quest-start`; its `quest start` refusing a quest claimed since is a skip, not a failure.
 
 Start each on the first entry of its `models` that can run.
+When it has an `arm` and runs that first entry, its brief says to end its `Implementer:` line with the arm, as `(arm B)`.
 Fall to the next when `quest agent` reports its CLI missing or logged out, or the agent stops on a usage limit with nothing written beyond the claim commit, continuing in that checkout and claim PR.
 Once a model has written anything, the PR is its: keep its worktree and session id to resume after the reset.
 Skip a quest whose list runs out, and report each harness's outage once.
