@@ -167,6 +167,7 @@ describe("readCodexMessages", () => {
 			undefined,
 			{},
 			{ content_item_kinds: ["user.text", "unknown"] },
+			{ content_item_kinds: ["user.text", "plugins.mystery"] },
 			{ content_item_metadata: [{ provenance: { type: "user" } }] },
 			{ content_item_metadata: [{ provenance: { type: "user" } }, { kind: "user" }] },
 			{ content_item_metadata: [{ provenance: { type: "user" } }, { provenance: { type: "plugin" } }] },
@@ -175,6 +176,43 @@ describe("readCodexMessages", () => {
 			writeFileSync(path, lines(codexMeta({}), turn(meta)));
 			expect(() => readCodexMessages(path, SINCE, plain)).toThrow(/provenance/);
 		}
+	});
+});
+
+describe("readCodexMessages from Codex 0.162's TUI", () => {
+	/** A user turn that marks its parts with content kinds and carries no provenance, as codex-tui 0.162 writes. */
+	const kindTurn = (timestamp: string, parts: [string, string][]) => ({
+		type: "response_item",
+		timestamp,
+		payload: {
+			type: "message",
+			role: "user",
+			content: parts.map(([text]) => ({ type: "input_text", text })),
+			internal_chat_message_metadata_passthrough: { content_item_kinds: parts.map(([, kind]) => kind) },
+		},
+	});
+
+	test("reads typed text and sets injected kinds and compaction replays aside", () => {
+		const path = join(tempDir(), "rollout.jsonl");
+		writeFileSync(
+			path,
+			lines(
+				codexMeta({ source: "cli", originator: "codex-tui" }),
+				kindTurn("2026-11-06T10:00:00Z", [
+					["# AGENTS.md", "agents_md.instructions"],
+					["<environment_context/>", "environments.environment_context"],
+				]),
+				kindTurn("2026-11-06T10:01:00Z", [["fix it", "user.text"]]),
+				kindTurn("2026-11-06T10:02:00Z", [["replayed", "unknown"]]),
+			),
+		);
+		expect(readCodexMessages(path, SINCE, plain).map((m) => m.kind === "message" && m.text)).toEqual(["fix it"]);
+	});
+
+	test("fails on a kind it does not know", () => {
+		const path = join(tempDir(), "rollout.jsonl");
+		writeFileSync(path, lines(codexMeta({}), kindTurn("2026-11-06T10:01:00Z", [["x", "plugins.mystery"]])));
+		expect(() => readCodexMessages(path, SINCE, plain)).toThrow(/unknown provenance: plugins.mystery/);
 	});
 });
 
@@ -272,6 +310,17 @@ describe("readClaudeMessages", () => {
 				picked: ["green, please"],
 			},
 		]);
+	});
+
+	test("skips and counts a malformed line, such as a partial record left mid-file", () => {
+		const path = join(tempDir(), `${SESSION}.jsonl`);
+		const partial = JSON.stringify(turn("2026-11-06T09:00:00Z", "lost")).slice(0, -10);
+		writeFileSync(path, `${partial}\n${lines(turn("2026-11-06T09:01:00Z", "kept"))}`);
+		expect(() => readClaudeMessages(path, SESSION, SINCE, plain)).toThrow(/not JSON/);
+		let skipped = 0;
+		const found = readClaudeMessages(path, SESSION, SINCE, plain, () => skipped++);
+		expect(found.map((m) => m.kind === "message" && m.text)).toEqual(["kept"]);
+		expect(skipped).toBe(1);
 	});
 
 	test("fails on answers in a shape it does not know", () => {
@@ -527,7 +576,9 @@ describe("messages", () => {
 			},
 		]);
 
-		const found = messages("2026-11-01", { env: {}, home });
+		const notes: string[] = [];
+		const found = messages("2026-11-01", { env: {}, home, warn: (line) => notes.push(line) });
+		expect(notes).toEqual([]);
 		expect(found).toEqual([
 			{
 				kind: "message",

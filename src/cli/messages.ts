@@ -34,12 +34,19 @@ function eachLine(path: string, visit: (line: string, complete: boolean) => bool
 	}
 }
 
-/** One JSON record of a log line, or null for an incomplete last line. */
-function parseLine(path: string, line: string, complete: boolean): Record<string, unknown> | null {
+/**
+ * One JSON record of a log line, or null for an incomplete last line. With `skip`, a complete line that is not JSON,
+ * such as a partial record a crashed write left mid-file, is counted through it and read as null instead of failing.
+ */
+function parseLine(path: string, line: string, complete: boolean, skip?: () => void): Record<string, unknown> | null {
 	try {
 		return JSON.parse(line) as Record<string, unknown>;
 	} catch (error) {
 		if (!complete) return null;
+		if (skip) {
+			skip();
+			return null;
+		}
 		throw new Error(`${path} has a line that is not JSON: ${(error as Error).message}`);
 	}
 }
@@ -104,6 +111,8 @@ export type Entry = Message | Answer;
 export interface MessagesDependencies {
 	env: NodeJS.ProcessEnv;
 	home: string;
+	/** Told, on stderr, of each Claude Code session whose malformed lines were skipped. */
+	warn?: (line: string) => void;
 }
 
 /** T3 Code drives these sessions and records who sent each message, so they are read from its state instead. */
@@ -210,6 +219,7 @@ export function readClaudeMessages(
 	session: string,
 	since: number,
 	repository: (dir: string) => string,
+	skip?: () => void,
 ): Entry[] {
 	const entries: Entry[] = [];
 	let skill: string | null = null;
@@ -217,7 +227,7 @@ export function readClaudeMessages(
 		// Only these lines can hold a typed turn, a skill, or an answer, so the far larger rest are never parsed.
 		if (!line.includes('"human"') && !line.includes("Base directory for this skill") && !line.includes('"answers"'))
 			return;
-		const record = parseLine(path, line, complete);
+		const record = parseLine(path, line, complete, skip);
 		if (!record || record.isSidechain === true) return;
 		const result = record.toolUseResult as Record<string, unknown> | undefined;
 		const human = (record.origin as { kind?: unknown } | undefined)?.kind === "human";
@@ -424,15 +434,26 @@ export function readCodexMessages(path: string, since: number, repository: (dir:
 		}
 		const meta = item.internal_chat_message_metadata_passthrough as Record<string, unknown> | undefined;
 		const provenance = meta?.content_item_metadata;
-		if (!Array.isArray(provenance)) {
-			// A compaction replays earlier turns, already read where they were typed, without their provenance.
+		let sources: unknown[];
+		if (Array.isArray(provenance)) {
+			sources = provenance.map((each) => (each as { provenance?: { type?: unknown } } | null)?.provenance?.type);
+		} else {
+			// Codex 0.162's TUI marks each part with a kind instead. A compaction replays earlier turns, already read
+			// where they were typed, with every kind unknown; a part whose kind says nothing otherwise cannot be told
+			// apart.
 			const kinds = meta?.content_item_kinds;
-			if (Array.isArray(kinds) && kinds.length > 0 && kinds.every((kind) => kind === "unknown")) return;
-			throw new Error(`${path} has a user turn without Codex's provenance, so typed text cannot be told apart`);
+			if (!Array.isArray(kinds) || kinds.length === 0 || kinds.includes("unknown")) {
+				if (Array.isArray(kinds) && kinds.length > 0 && kinds.every((kind) => kind === "unknown")) return;
+				throw new Error(
+					`${path} has a user turn without Codex's provenance, so typed text cannot be told apart`,
+				);
+			}
+			sources = kinds.map((kind) => {
+				if (kind === "user.text") return "user";
+				if (CODEX_INJECTED.has(kind as string)) return "harness";
+				throw new Error(`${path} has a user turn with an unknown provenance: ${String(kind)}`);
+			});
 		}
-		const sources = provenance.map(
-			(each) => (each as { provenance?: { type?: unknown } } | null)?.provenance?.type,
-		);
 		if (sources.length !== content.length)
 			throw new Error(`${path} has a user turn whose provenance does not cover each part`);
 		const unknown = sources.find((type) => !CODEX_SOURCES.has(type as string));
@@ -457,6 +478,21 @@ function codexSkill(text: string): string | null {
 
 /** Who Codex says wrote a part of a user turn: the person, or the instructions, harness, or skill it added. */
 const CODEX_SOURCES = new Set(["user", "agents_md", "harness", "skills"]);
+
+/** The content kinds Codex 0.162 gives the parts it adds to a user turn, never typed by the person. */
+const CODEX_INJECTED = new Set([
+	"agents_md.instructions",
+	"environments.environment_context",
+	"multi_agent.role_instructions",
+	"multi_agent.mode_instructions",
+	"host_skills.instructions",
+	"permissions.instructions",
+	"collaboration_mode.instructions",
+	"generic.developer_instructions",
+	"tools.deferred_namespaces",
+	"plugins.recommendations",
+	"model.base_instructions",
+]);
 
 /** T3 Code's agent names, as the harness names `quest usage` reports. */
 const T3_DRIVERS: Record<string, string> = { claudeAgent: "claude", codex: "codex" };
@@ -529,8 +565,13 @@ export function messages(since: string, deps: MessagesDependencies): Entry[] {
 	const from = new Date(`${since}T00:00:00`).getTime();
 	const repository = repositories();
 	const found: Entry[] = [];
-	for (const [session, path] of claudeLogs(deps))
-		if (statSync(path).mtimeMs >= from) found.push(...readClaudeMessages(path, session, from, repository));
+	for (const [session, path] of claudeLogs(deps)) {
+		if (statSync(path).mtimeMs < from) continue;
+		let skipped = 0;
+		found.push(...readClaudeMessages(path, session, from, repository, () => skipped++));
+		if (skipped)
+			deps.warn?.(`skipped ${skipped} malformed line${skipped === 1 ? "" : "s"} in session ${session} (${path})`);
+	}
 	const codex = deps.env.CODEX_HOME || join(deps.home, ".codex");
 	const threads = new Set<string>();
 	for (const path of [
