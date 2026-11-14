@@ -299,7 +299,7 @@ export function main(argv: string[], out: Output): number | Promise<number> {
 				"(linux, macos, windows) under the quest's ## Hosts, empty when it runs anywhere, and models ranks the {harness, model, effort} " +
 				"entries that write the quest: its size's list, or the next size's while a Maintainer: item under its " +
 				"## Waiting leaves a decision open (quest models lists them). While the writer A/B runs, arm is A or B for " +
-				"a size that runs one and null otherwise, and models opens with that arm's entry; the agent that runs it " +
+				"a size that runs one, and null for L or a quest routed up for an open Maintainer: item, and models opens with that arm's entry; the agent that runs it " +
 				"records the arm on its Implementer line.\n\n" +
 				"--unclaimed ranks the fetched upstream default branch's tree instead of the checkout, then drops " +
 				"quests someone holds: a quest branch upstream, or an open PR from that branch in any repository. A " +

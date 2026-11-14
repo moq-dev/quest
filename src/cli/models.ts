@@ -67,28 +67,25 @@ export const ARMS: Partial<Record<Size, Record<Arm, Model>>> = {
 	XL: { A: opus("xhigh"), B: fable("medium") },
 };
 
-/** The size quest `doc` is written at: its own, or the next while a `Maintainer:` wait leaves it a decision to settle. */
-function writeSize(doc: Doc): Size {
+/**
+ * The writers that start quest `doc`, ranked, and its writer A/B arm. A quest
+ * whose size runs an arm starts on the arm's entry, then the size's list
+ * without it; the arm hashes the quest's path, so a restart or respawn draws
+ * the same one. A `Maintainer:` wait leaves it a decision to settle, so it
+ * runs the next size's list and no arm, which keeps each arm at its PR's size.
+ */
+export function questWriters(doc: Doc): { arm: Arm | null; models: readonly Model[] } {
 	const sized = size(doc);
 	// `quest check` requires a size of every quest that is not an epic, and only those can be ready.
 	if (sized === null) throw new Error(`${doc.path} has no size`);
-	const bump = waits(doc).some(onMaintainer) ? 1 : 0;
-	return SIZES[Math.min(SIZES.indexOf(sized) + bump, SIZES.length - 1)]!;
-}
-
-/**
- * The writers that start quest `doc`, ranked, and its arm when its size runs
- * one: the arm's entry, then the size's list without it. The arm hashes the
- * quest's path, so a restart or respawn draws the same one.
- */
-export function questWriters(doc: Doc): { arm: Arm | null; models: readonly Model[] } {
-	const at = writeSize(doc);
-	const arms = ARMS[at];
-	if (!arms) return { arm: null, models: WRITERS[at] };
+	if (waits(doc).some(onMaintainer))
+		return { arm: null, models: WRITERS[SIZES[Math.min(SIZES.indexOf(sized) + 1, SIZES.length - 1)]!] };
+	const arms = ARMS[sized];
+	if (!arms) return { arm: null, models: WRITERS[sized] };
 	const arm = ARM_NAMES[createHash("sha256").update(doc.path).digest()[0]! & 1]!;
 	const entry = arms[arm];
 	const same = (e: Model) => e.model === entry.model && e.effort === entry.effort;
-	return { arm, models: [entry, ...WRITERS[at].filter((e) => !same(e))] };
+	return { arm, models: [entry, ...WRITERS[sized].filter((e) => !same(e))] };
 }
 
 /**

@@ -1272,7 +1272,9 @@ writer, and arm B runs Claude Code `claude-opus-5-5` medium for XS,
 `claude-sonnet-5-5` high for S, `claude-opus-5-5` high for M, and
 `claude-fable-5-2` medium for XL. A hash of the quest's path picks the arm,
 so a restart or respawn keeps it; `quest unblocked --json` names it as `arm`,
-`A`, `B`, or `null` for L, and puts its entry first in `models`. The agent
+`A` or `B`, and puts its entry first in `models`. L runs no arm, nor does a
+quest with a `Maintainer:` decision open, which runs the next size's list, so
+an arm always runs at its PR's size; their `arm` is `null`. The agent
 that runs that entry ends its `Implementer:` line with the arm, as
 `Implementer: Claude Code, claude-opus-5-5, high effort (arm B)`; a fallback
 names none, so its PR counts in neither arm.

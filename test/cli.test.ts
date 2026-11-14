@@ -172,19 +172,19 @@ test("unblocked reports the hosts a quest names", () => {
 
 test("unblocked routes a quest with a decision open one size up, and XL stays XL", () => {
 	const models = (tree: Tree) =>
-		JSON.parse(tree.run("unblocked", "--json").stdout).map((quest: { models: { effort: string }[] }) =>
-			quest.models.map((entry) => entry.effort).join(" "),
+		JSON.parse(tree.run("unblocked", "--json").stdout).map(
+			(quest: { arm: string | null; models: { effort: string }[] }) =>
+				[String(quest.arm), ...quest.models.map((entry) => entry.effort)].join(" "),
 		);
-	// Its path hashes to arm B at every size that runs one.
+	// Its path hashes to arm B at every size that runs one; a decision left open runs no arm.
 	const tree = Tree.baseline().append("quest/m0/epic/one.md", "\n## Waiting\n\n- moq-dev/moq: a release.\n");
-	expect(models(tree)).toEqual(["high medium medium"]);
+	expect(models(tree)).toEqual(["B high medium medium"]);
 	tree.append("quest/m0/epic/one.md", "- Maintainer: pick a name.\n");
-	expect(models(tree)).toEqual(["high medium high"]);
-	tree.write("quest/m0/epic/one.md", "# [M] One\n\n## Goal\n\nWork.\n\n## Waiting\n\n- Maintainer: pick.\n");
-	// L runs no arm.
-	expect(models(tree)).toEqual(["high xhigh"]);
+	expect(models(tree)).toEqual(["null medium high"]);
 	tree.write("quest/m0/epic/one.md", "# [XL] One\n\n## Goal\n\nWork.\n\n## Waiting\n\n- Maintainer: pick.\n");
-	expect(models(tree)).toEqual(["medium xhigh"]);
+	expect(models(tree)).toEqual(["null xhigh"]);
+	tree.write("quest/m0/epic/one.md", "# [XL] One\n\n## Goal\n\nWork.\n");
+	expect(models(tree)).toEqual(["B medium xhigh"]);
 });
 
 test("models ranks a size's writers, or the one entry that runs a PR's writer", () => {
