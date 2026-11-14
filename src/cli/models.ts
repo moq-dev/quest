@@ -50,8 +50,8 @@ export const REVIEWERS: Record<Size, readonly Model[]> = {
 };
 
 /**
- * The models that set a PR's risk tier from its diff, ranked: the first whose
- * CLI is logged in classifies. The tier never depends on who wrote the change,
+ * The models that set a PR's risk tier from its diff, ranked: the first that
+ * can run classifies, past any logged out or at its usage limit. The tier never depends on who wrote the change,
  * so the list is the same for every PR, unlike the reviewers'. Haiku is the
  * cheapest, and the classifier's prompt stays below the 100k input tokens past
  * which it costs five times as much.

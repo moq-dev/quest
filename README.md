@@ -1513,7 +1513,9 @@ reports first. A base with no `RISK.md` makes every change no path holds high
 Otherwise a classifier reads the diff and the base's `RISK.md` in one read-only
 turn and replies with a tier and one sentence on why: Claude Code
 `claude-haiku-5-5` at low effort, or Codex `gpt-6.1-sol` at low when Claude
-Code is missing or logged out. A diff past 200,000 characters gives it only the
+Code is missing, logged out, has its login rejected, or hit its usage limit.
+When neither can run, the review fails on the limit that resets first if both
+hit theirs, and otherwise as a usage error naming why each failed. A diff past 200,000 characters gives it only the
 stat, and it reads the parts it needs. The tier is kept with the reviewers'
 sessions, so a later round on the same head and base `RISK.md` reuses it, and
 `--new` classifies again. Each reviewer judges the tier too, told the

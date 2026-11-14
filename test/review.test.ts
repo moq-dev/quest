@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { type Output, main } from "../src/cli/main";
@@ -76,8 +76,9 @@ const RISK_REPLY = `JSON.stringify(process.env.FAKE_RISK ? JSON.parse(process.en
  * CODEX_ACCESS_TOKEN but not CODEX_API_KEY. FAKE_REJECTED has the API
  * reject the login in each turn with the real CLI's error, in the style it
  * names. FAKE_LIMITED fails a turn on the account's usage limit with the real
- * CLI's error, naming its reset unless set to `unknown`. FAKE_REPLY replaces
- * the findings reply.
+ * CLI's error, naming its reset unless set to `unknown`. FAKE_CLASSIFY fails
+ * the classifier's turn of each `<harness>-rejected` or `<harness>-limited` it
+ * lists, the same way. FAKE_REPLY replaces the findings reply.
  */
 const FAKES: Record<string, string> = {
 	claude: `
@@ -113,7 +114,17 @@ if (process.env.FAKE_LIMITED && argv.includes("--resume")) {
 	process.exit(1);
 }
 const usage = { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 0 };
+const failing = (process.env.FAKE_CLASSIFY ?? "").split(",");
 if (argv.includes("--session-id") && argv.includes("--json-schema")) {
+	if (failing.includes("claude-rejected")) {
+		result({ session_id: at("--session-id"), is_error: true, api_error_status: 401, result: "Failed to authenticate. API Error: 401 Invalid bearer token" });
+		process.exit(1);
+	}
+	if (failing.includes("claude-limited")) {
+		console.log(JSON.stringify({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1900000000 } }));
+		result({ session_id: at("--session-id"), is_error: true, result: "You've hit your weekly limit · resets Nov 5, 3pm (UTC)" });
+		process.exit(1);
+	}
 	const reply = ${RISK_REPLY};
 	result({
 		session_id: at("--session-id"),
@@ -189,6 +200,16 @@ if (argv[1] === "review") {
 	event({ type: "turn.completed", usage: zero });
 } else if (argv[1] !== "resume") {
 	event({ type: "thread.started", thread_id: "thread-classify" });
+	const failing = (process.env.FAKE_CLASSIFY ?? "").split(",");
+	if (failing.includes("codex-rejected")) {
+		event({ type: "turn.failed", error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header" } });
+		process.exit(1);
+	}
+	if (failing.includes("codex-limited")) {
+		const message = "You've hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 5th, 2026 3:15 PM.";
+		event({ type: "turn.failed", error: { message } });
+		process.exit(1);
+	}
 	message(${RISK_REPLY});
 	event({ type: "turn.completed", usage: { input_tokens: 40, cached_input_tokens: 0, output_tokens: 3 } });
 } else {
@@ -1514,9 +1535,50 @@ fakes("without a logged-in Claude Code, Codex classifies", async () => {
 	expect(call.argv.slice(0, 2)).toEqual(["exec", "--json"]);
 	expect(call.argv).toContain('model_reasoning_effort="low"');
 	expect(call.argv).toContain('sandbox_mode="read-only"');
-	const schema = JSON.parse(readFileSync(call.argv[call.argv.indexOf("--output-schema") + 1]!, "utf8"));
-	expect(schema.required).toEqual(["tier", "reason"]);
+	const file = call.argv[call.argv.indexOf("--output-schema") + 1]!;
+	expect(JSON.parse(readFileSync(file, "utf8")).required).toEqual(["tier", "reason"]);
+	// Each schema has a file named by its content, since every worktree of the clone, on any release, writes there.
+	const report = s.calls().find((each) => each.argv[1] === "resume")!;
+	const reportFile = report.argv[report.argv.indexOf("--output-schema") + 1]!;
+	expect(dirname(reportFile)).toBe(dirname(file));
+	expect([basename(file), basename(reportFile)]).toEqual([
+		expect.stringMatching(/^schema-[0-9a-f]{16}\.json$/),
+		expect.stringMatching(/^schema-[0-9a-f]{16}\.json$/),
+	]);
+	expect(reportFile).not.toBe(file);
+	expect(JSON.parse(readFileSync(reportFile, "utf8")).required).toContain("risk");
 });
+
+fakes(
+	"a classifier whose turn fails on its login or usage limit passes the turn to the next",
+	async () => {
+		const s = setup();
+		moveBase(s.repo, (dir) => write(dir, "RISK.md", riskFile([])));
+		vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+		const run = async (failing: string) => {
+			vi.stubEnv("FAKE_CLASSIFY", failing);
+			return quest("--root", s.repo, "review", "--new");
+		};
+		for (const failing of ["claude-rejected", "claude-limited"]) {
+			const passed = await run(failing);
+			expect(passed.code, passed.stderr).toBe(0);
+			expect(passed.stdout).toContain("classifier codex gpt-6.1-sol low thread-classify\n");
+		}
+		// With every classifier out of usage, the run fails on the limit that resets first.
+		expect(await run("claude-limited,codex-limited")).toMatchObject({
+			code: 3,
+			stdout: "",
+			stderr: `error: codex hit its usage limit; resets ${codexReset}\n`,
+		});
+		// Otherwise it names why each failed.
+		const failed = await run("claude-rejected,codex-limited");
+		expect(failed.code).toBe(2);
+		expect(failed.stderr).toMatch(
+			/^error: no classifier could set the risk tier: claude is not logged in .*; codex hit its usage limit; resets /,
+		);
+	},
+	20_000,
+);
 
 fakes("a reviewer raises the tier, and the record keeps the classifier's beside it", async () => {
 	const s = setup();

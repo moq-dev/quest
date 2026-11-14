@@ -1350,6 +1350,17 @@ export async function fetchBase(root: string, base?: string): Promise<string> {
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16);
 
+/**
+ * Write `schema` in `dir` for a CLI's `--output-schema` to read, and return its path. The clone's worktrees share
+ * `dir`, and another `quest` release may be reviewing there at once with a schema of its own, so the file is named
+ * by its content: no run rewrites the file another reads.
+ */
+function saveSchema(dir: string, schema: object): string {
+	const path = join(dir, `schema-${digest(JSON.stringify(schema))}.json`);
+	save(path, schema);
+	return path;
+}
+
 /** Where a branch's review session is kept, under the clone's common Git directory `common`. */
 export function sessionFile(common: string, branch: string): string {
 	return join(common, "quest", "review", `${digest(branch)}.json`);
@@ -1538,7 +1549,7 @@ interface Classifying {
 /**
  * Set the head's risk tier before any reviewer runs, from the change alone: high when it touches a path
  * {@link ALWAYS_HIGH} or the base's risk file holds high, medium when the base has no risk file, and otherwise as the
- * first classifier whose CLI is logged in judges the diff against the file. The last classification is reused while
+ * first of {@link CLASSIFIERS} that can run judges the diff against the file. The last classification is reused while
  * the change and the file are the same, which `key` names.
  */
 export async function classify(input: Classifying): Promise<{ key: string; value: Classified }> {
@@ -1569,51 +1580,58 @@ export async function classify(input: Classifying): Promise<{ key: string; value
 		return set({ tier: "medium", reason, by: { kind: "default" } });
 	}
 
-	const { entry, cli } = await classifier(root, input.env, input.signal);
-	const schemaFile = join(input.dir, "risk-schema.json");
-	save(schemaFile, ASSESSMENT);
-	const context: Context = {
-		mergeBase: change.mergeBase,
-		instructions: CLASSIFY_INSTRUCTIONS,
-		model: entry.model,
-		effort: entry.effort,
-		schema: ASSESSMENT,
-		schemaFile,
-		...(cli.env.OPENAI_BASE_URL && { openaiBaseUrl: cli.env.OPENAI_BASE_URL }),
-	};
 	const diff = (args: string[]) =>
 		git(root, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", ...args, range]);
 	const prompt = classifyPrompt(change, { sha: baseSha, text }, diff(["--stat=160"]), diff(["--patch"]));
-	const reply = await turn(cli, cli.reviewer.ask(context, randomUUID(), prompt), root, entry.model);
-	if (reply.session === undefined) throw new Error(`${entry.harness} did not report the classifier's session`);
-	const { tier, reason } = assessment(replied(reply, "the classifier's reply"), "the classifier's reply");
-	return {
-		key,
-		value: {
-			tier,
-			reason,
-			by: { kind: "model", ...entry, session: reply.session },
-			usage: reported(reply.usage) ? [{ turn: "classify", ...reply.usage }] : [],
-		},
-	};
+	const schemaFile = saveSchema(input.dir, ASSESSMENT);
+	// Every classifier sets the same tier from the same prompt, so one that is logged out, has its login rejected, or
+	// hit its usage limit passes the turn to the next.
+	const failures: (ReviewInputError | ReviewLimitError)[] = [];
+	for (const entry of CLASSIFIERS) {
+		let reply: Reply;
+		try {
+			const cli = await prepare(entry.harness, root, input.env, input.signal);
+			const context: Context = {
+				mergeBase: change.mergeBase,
+				instructions: CLASSIFY_INSTRUCTIONS,
+				model: entry.model,
+				effort: entry.effort,
+				schema: ASSESSMENT,
+				schemaFile,
+				...(cli.env.OPENAI_BASE_URL && { openaiBaseUrl: cli.env.OPENAI_BASE_URL }),
+			};
+			reply = await turn(cli, cli.reviewer.ask(context, randomUUID(), prompt), root, entry.model);
+		} catch (error) {
+			if (!(error instanceof ReviewInputError || error instanceof ReviewLimitError)) throw error;
+			failures.push(error);
+			continue;
+		}
+		if (reply.session === undefined) throw new Error(`${entry.harness} did not report the classifier's session`);
+		const { tier, reason } = assessment(replied(reply, "the classifier's reply"), "the classifier's reply");
+		return {
+			key,
+			value: {
+				tier,
+				reason,
+				by: { kind: "model", ...entry, session: reply.session },
+				usage: reported(reply.usage) ? [{ turn: "classify", ...reply.usage }] : [],
+			},
+		};
+	}
+	throw unclassified(failures);
 }
 
-/** The first of {@link CLASSIFIERS} whose CLI is installed and logged in, or the first one's error when none is. */
-async function classifier(
-	root: string,
-	env: NodeJS.ProcessEnv,
-	signal?: AbortSignal,
-): Promise<{ entry: Model; cli: Cli }> {
-	let failure: unknown;
-	for (const entry of CLASSIFIERS) {
-		try {
-			return { entry, cli: await prepare(entry.harness, root, env, signal) };
-		} catch (error) {
-			if (!(error instanceof ReviewInputError)) throw error;
-			failure ??= error;
-		}
-	}
-	throw failure;
+/**
+ * Why no classifier set the tier: the usage limit that resets first when every one hit its own, so a caller waits
+ * for the earliest, else each classifier's reason.
+ */
+function unclassified(failures: (ReviewInputError | ReviewLimitError)[]): Error {
+	const limits = failures.filter((each) => each instanceof ReviewLimitError);
+	if (limits.length === failures.length)
+		return limits.sort((a, b) => (a.until ?? Infinity) - (b.until ?? Infinity))[0]!;
+	return new ReviewInputError(
+		`no classifier could set the risk tier: ${failures.map((each) => each.message).join("; ")}`,
+	);
 }
 
 /** The head's risk after a run's `rounds`: the classifier's tier, raised to the riskiest a round judged it, the first on a tie. */
@@ -1939,10 +1957,8 @@ async function reviewWith(shared: Shared, seat: Seat, responses: string | undefi
 
 	const cli = await prepare(harness, root, shared.env, shared.signal);
 
-	// Named by its bound, so a round on another branch never rewrites the file this one reads.
 	const replySchema = schema(earlier.length);
-	const schemaFile = join(shared.dir, `schema-${earlier.length}.json`);
-	save(schemaFile, replySchema);
+	const schemaFile = saveSchema(shared.dir, replySchema);
 	const context: Context = {
 		mergeBase: change.mergeBase,
 		instructions: instructionsPrompt(shared.base.sha, shared.files),
