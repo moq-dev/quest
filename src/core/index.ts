@@ -95,6 +95,15 @@ export {
 	heldToken,
 } from "./hold";
 export {
+	type BreakageRecord,
+	type Culprit,
+	FINDERS,
+	type Finder,
+	type Seat,
+	breakageKey,
+	parseBreakage,
+} from "./breakage";
+export {
 	type ModelSpend,
 	type RecordUpload,
 	ROLES,

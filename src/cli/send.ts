@@ -1,21 +1,22 @@
-// Sending each session's record to the Kixel Code endpoint its checkout names. The stop hook only queues the session;
+// Sending each session's record, and the breakages its PRs name, to the Kixel Code endpoint its checkout names. The stop hook only queues the session;
 // one sender per user, run by its service manager, rebuilds each queued session's record, with its sub-agents', and
 // posts them, keeping what failed for the next pass. A record replaces its earlier copy, so a resend never doubles.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, setPriority } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
-import { type SessionRecord, parseUpload } from "../core";
-import { type GitHubDependencies, GitHub } from "../github/client";
+import { type BreakageRecord, type Finder, type RecordUpload, parseUpload } from "../core";
+import { culpritOf } from "./breakage";
+import { CLOCK_SKEW, type GitHubDependencies, GitHub } from "../github/client";
 import { baseRepository } from "./claims";
 import { discoveryEnv } from "./git";
 import { readRemote, remoteRepository } from "./github";
 import { eachLine } from "./messages";
 import { questRoot } from "./rules";
 import { type Labeled, type SplitDependencies, type Steps, labelSession, readSteps, splitOf } from "./split";
-import { type Pull, type Session, fold, key, sessionRecords, updatedPulls } from "./usage";
+import { type Pull, type Session, fixBreakages, fold, key, readPull, sessionRecords, updatedPulls } from "./usage";
 import { type LoggedWait } from "./waits";
 
 /** The checkout's file naming its record endpoint, as `{"records": "https://..."}`. */
@@ -254,6 +255,7 @@ export interface Sent {
 	endpoint: string;
 	repository: string;
 	records: number;
+	breakages: number;
 	/** The endpoint refused the token, so the records were dropped. */
 	refused: boolean;
 }
@@ -296,7 +298,7 @@ export async function runSender(deps: SendDependencies, log: (line: string) => v
 				log(
 					each.refused
 						? `${each.endpoint} refused the token for ${each.repository}; ${each.records} records dropped`
-						: `sent ${each.records} records of ${each.repository} to ${each.endpoint}`,
+						: `sent ${each.records} records and ${each.breakages} breakages of ${each.repository} to ${each.endpoint}`,
 				);
 		} catch (error) {
 			log(error instanceof Error ? error.message : String(error));
@@ -365,7 +367,14 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 			}
 			const [owner, repo] = origin.split("/") as [string, string];
 			const repository = await baseRepository(client, { owner, repo }, prefix);
-			const pulls: Pull[] = await updatedPulls(client, repository, since);
+			// PRs are read from the last upload's read, if earlier, so a fix that merged after its sessions were sent,
+			// as through the merge queue, still reaches the store with the next session.
+			const read = deps.now() - CLOCK_SKEW;
+			const pulls: Pull[] = await updatedPulls(
+				client,
+				repository,
+				Math.min(since, readCursor(deps.env, id) ?? since),
+			);
 			const emit = new Set<Session>();
 			const missing: typeof group = [];
 			for (const q of group) {
@@ -461,17 +470,11 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 					return read ? splitOf(read.steps, read.labeled, waits, from) : null;
 				},
 			});
-			const upload = [...records.values()];
-			try {
-				parseUpload({ records: upload });
-			} catch (error) {
-				throw new Error(`this quest built an upload its own parseUpload refuses: ${(error as Error).message}`);
-			}
-			const response = await deps.fetch(endpoint, {
-				method: "POST",
-				headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-				body: JSON.stringify({ records: upload } satisfies { records: SessionRecord[] }),
-			});
+			const upload: RecordUpload = {
+				records: [...records.values()],
+				breakages: await fixBreakages({ client, repository, pulls }),
+			};
+			const response = await post(deps.fetch, endpoint, token, upload);
 			if (response.status === 401 || response.status === 403) {
 				refuse(deps.env, endpoint, token);
 				clearBackoff(deps.env, id);
@@ -479,14 +482,27 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 				notes.push(
 					`${endpoint} refused this host's token (${response.status}), so it is sent no more session records until the token changes`,
 				);
-				sent.push({ endpoint, repository: key(repository), records: upload.length, refused: true });
+				sent.push({
+					endpoint,
+					repository: key(repository),
+					records: upload.records.length,
+					breakages: upload.breakages.length,
+					refused: true,
+				});
 				continue;
 			}
 			if (!response.ok)
 				throw new Error(`${endpoint} answered ${response.status}: ${(await response.text()).slice(0, 500)}`);
 			clearBackoff(deps.env, id);
+			writeCursor(deps.env, id, read);
 			for (const q of group) settle(q);
-			sent.push({ endpoint, repository: key(repository), records: upload.length, refused: false });
+			sent.push({
+				endpoint,
+				repository: key(repository),
+				records: upload.records.length,
+				breakages: upload.breakages.length,
+				refused: false,
+			});
 		} catch (error) {
 			const wait = backOff(deps, id);
 			failures.push(
@@ -500,6 +516,99 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 	return sent;
 }
 
+/**
+ * `text` as epoch ms when it is an ISO 8601 date and time with an explicit `Z` or offset on a real calendar day, else
+ * null: `Date.parse` alone takes a bare date as UTC midnight, a time without an offset as this host's, and rolls an
+ * impossible day such as February 30 into the next month.
+ */
+export function parseInstant(text: string): number | null {
+	const match =
+		/^(\d{4})-(\d\d)-(\d\d)T([01]\d|2[0-3]):[0-5]\d(:[0-5]\d(\.\d+)?)?(Z|[+-]([01]\d|2[0-3]):[0-5]\d)$/.exec(text);
+	if (!match) return null;
+	const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+	const date = new Date(0);
+	date.setUTCFullYear(year, month - 1, day);
+	if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+	const at = Date.parse(text);
+	return Number.isNaN(at) ? null : at;
+}
+
+/** An incident to report, as a deploy or alert hands it to `quest records incident`. */
+export interface Incident {
+	/** A directory in the checkout whose endpoint and repository it is reported for. */
+	cwd: string;
+	/** The reporter's stable ID for it, such as the alert's URL; reporting the same ID again replaces it. */
+	id: string;
+	found: Finder;
+	/** The PR that caused it, or null while unknown, which leaves it open. */
+	pull: number | null;
+	/** When it was found, epoch ms. */
+	at: number;
+}
+
+/**
+ * Post `incident` as a breakage to the endpoint the checkout's `${CHECKOUT_CONFIG}` names, with the token the user
+ * paired with it, and return it. Unlike the sender, it posts at once and fails loud on anything the endpoint does not
+ * take, refusal included, since a deploy or alert calls it once and nothing retries.
+ */
+export async function reportIncident(
+	incident: Incident,
+	deps: Pick<SendDependencies, "env" | "github" | "fetch">,
+): Promise<BreakageRecord> {
+	const root = questRoot(resolve(incident.cwd));
+	if (root === null) throw new Error(`${incident.cwd} is not in a checkout that uses Quest`);
+	const endpoint = checkoutEndpoint(root);
+	if (endpoint === null) throw new Error(`${join(root, CHECKOUT_CONFIG)} names no record endpoint`);
+	const token = tokenFor(endpoint, deps.env);
+	if (token === null) throw new Error(`${tokensPath(deps.env)} holds no token for ${endpoint}`);
+	const remote = readRemote(root, "origin");
+	const origin = remote === null ? null : remoteRepository(remote).repository;
+	if (origin === null) throw new Error("origin is not on GitHub");
+	const client = new GitHub(deps.github());
+	const prefix = spawnSync("git", ["-C", root, "rev-parse", "--show-prefix"], {
+		encoding: "utf8",
+		env: discoveryEnv(),
+	}).stdout.trim();
+	const repository = await baseRepository(client, origin, prefix);
+	let culprit: BreakageRecord["culprit"] = null;
+	if (incident.pull !== null) {
+		const found = await readPull(client, repository, incident.pull);
+		if (found === null) throw new Error(`${key(repository)} has no PR #${incident.pull}`);
+		culprit = culpritOf(found);
+	}
+	const breakage: BreakageRecord = {
+		repository: key(repository),
+		culprit,
+		fix: null,
+		incident: incident.id,
+		found: incident.found,
+		at: new Date(incident.at).toISOString(),
+	};
+	const response = await post(deps.fetch, endpoint, token, { records: [], breakages: [breakage] });
+	if (!response.ok)
+		throw new Error(`${endpoint} answered ${response.status}: ${(await response.text()).slice(0, 500)}`);
+	return breakage;
+}
+
+/** POST `upload` to `endpoint` with `token`, after checking it is one the store's own `parseUpload` takes. */
+async function post(
+	fetch: typeof globalThis.fetch,
+	endpoint: string,
+	token: string,
+	upload: RecordUpload,
+): Promise<Response> {
+	try {
+		parseUpload(upload);
+	} catch (error) {
+		throw new Error(`this quest built an upload its own parseUpload refuses: ${(error as Error).message}`);
+	}
+	return fetch(endpoint, {
+		method: "POST",
+		headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+		body: JSON.stringify(upload),
+	});
+}
+
 /** The longest a failing group waits between tries. */
 const MAX_BACKOFF = 6 * 3_600_000;
 
@@ -507,6 +616,25 @@ const MAX_BACKOFF = 6 * 3_600_000;
 interface Backoff {
 	failures: number;
 	next: number;
+}
+
+const cursorPath = (env: NodeJS.ProcessEnv, id: string) => join(stateDirectory(env), "read", digest(id));
+
+/** When group `id`'s last successful upload read its PRs, epoch ms, or null; an unreadable file reads as none. */
+function readCursor(env: NodeJS.ProcessEnv, id: string): number | null {
+	try {
+		const at = Number(readFileSync(cursorPath(env, id), "utf8"));
+		return Number.isFinite(at) && at > 0 ? at : null;
+	} catch {
+		return null;
+	}
+}
+
+function writeCursor(env: NodeJS.ProcessEnv, id: string, at: number): void {
+	mkdirSync(join(stateDirectory(env), "read"), { recursive: true, mode: 0o700 });
+	const path = cursorPath(env, id);
+	writeFileSync(`${path}.new`, String(at));
+	renameSync(`${path}.new`, path);
 }
 
 const backoffPath = (env: NodeJS.ProcessEnv, id: string) => join(stateDirectory(env), "backoff", digest(id));

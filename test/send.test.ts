@@ -6,7 +6,15 @@ import { expect, test } from "vitest";
 
 import { REFERENCE_LINE, parseUpload } from "../src/core";
 import { hook } from "../src/cli/hooks";
-import { type SendDependencies, queue, runSender, sendPass, tokensPath } from "../src/cli/send";
+import {
+	type SendDependencies,
+	parseInstant,
+	queue,
+	reportIncident,
+	runSender,
+	sendPass,
+	tokensPath,
+} from "../src/cli/send";
 import type { Session } from "../src/cli/usage";
 import { tempDir } from "./fixture";
 
@@ -101,6 +109,7 @@ function sender(
 	status: number | (() => number),
 	sessions: Session[] | null,
 	during: () => void = () => {},
+	pulls: object[] = [],
 ) {
 	const uploads: { token: string; body: unknown }[] = [];
 	const windows: Date[] = [];
@@ -119,8 +128,10 @@ function sender(
 				ssh_url: "git@github.com:acme/proj.git",
 				fork: false,
 			});
+		if (url.pathname === "/repos/acme/proj/pulls/3") return json(CULPRIT);
 		if (url.pathname === "/repos/acme/proj/pulls")
 			return json([
+				...pulls,
 				{
 					number: 7,
 					html_url: "https://github.com/acme/proj/pull/7",
@@ -173,6 +184,21 @@ function sender(
 	return { deps, uploads, windows, slept, clock };
 }
 
+/** A merged PR older than any window, which later PRs name as a culprit. */
+const CULPRIT = {
+	number: 3,
+	html_url: "https://github.com/acme/proj/pull/3",
+	title: "C",
+	head: { ref: "quest/m0/c", repo: { full_name: "acme/proj" } },
+	state: "closed",
+	draft: false,
+	merged_at: "2026-10-01T00:00:00Z",
+	created_at: "2026-09-30T00:00:00Z",
+	updated_at: "2026-10-01T00:00:00Z",
+	closed_at: "2026-10-01T00:00:00Z",
+	body: "## Models\n\n- Size: M\n- Implementer: Claude Code, claude-opus-5-5, medium effort\n",
+};
+
 const pending = (env: NodeJS.ProcessEnv) => readdirSync(join(env.XDG_STATE_HOME!, "quest", "records", "pending"));
 
 test("the sender posts each queued session with its sub-agents, from its transcript's start", async () => {
@@ -185,7 +211,9 @@ test("the sender posts each queued session with its sub-agents, from its transcr
 		session("other", "quest/m0/a"),
 	];
 	const { deps, uploads, windows } = sender(env, 200, sessions);
-	expect(await sendPass(deps)).toEqual([{ endpoint: ENDPOINT, repository: "acme/proj", records: 2, refused: false }]);
+	expect(await sendPass(deps)).toEqual([
+		{ endpoint: ENDPOINT, repository: "acme/proj", records: 2, breakages: 0, refused: false },
+	]);
 	expect(windows).toEqual([new Date("2026-11-06T10:00:00Z")]);
 	expect(uploads).toHaveLength(1);
 	expect(uploads[0]!.token).toBe("Bearer secret");
@@ -219,7 +247,7 @@ test("the sender labels each session's steps and sends its split; one no model c
 	// Labeling never holds the record back: it is sent unsplit, the queue settles, and the next stop says why.
 	const failing = sender(env, 200, sessions);
 	expect(await sendPass(failing.deps)).toEqual([
-		{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, refused: false },
+		{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, breakages: 0, refused: false },
 	]);
 	expect(parseUpload(failing.uploads[0]!.body).records[0]!.split).toBeNull();
 	expect(pending(env)).toEqual([]);
@@ -258,7 +286,7 @@ test("a failed upload stays queued and is said once; a refused token stops sendi
 
 	const refusing = sender(env, 403, [session("s1", "quest/m0/a")]);
 	expect(await sendPass(refusing.deps)).toEqual([
-		{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, refused: true },
+		{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, breakages: 0, refused: true },
 	]);
 	expect(pending(env)).toEqual([]);
 	expect(queue(stopped(root), env)).toEqual({
@@ -338,7 +366,9 @@ test("a session token-max no longer lists is dropped and said, without holding b
 	queue(stopped(root), env);
 	queue({ ...stopped(root), session: "gone" }, env);
 	const { deps, uploads } = sender(env, 200, [session("s1", "quest/m0/a")]);
-	expect(await sendPass(deps)).toEqual([{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, refused: false }]);
+	expect(await sendPass(deps)).toEqual([
+		{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, breakages: 0, refused: false },
+	]);
 	expect(parseUpload(uploads[0]!.body).records.map((r) => r.session)).toEqual(["s1"]);
 	expect(pending(env)).toEqual([]);
 	expect(queue(stopped(root), env).notices).toEqual([
@@ -436,7 +466,10 @@ test("the sender passes every interval, records its PID, and outlives a failed p
 	expect(slept).toEqual([60_000, 60_000, 60_000]);
 	// The failed pass keeps the session; the next sends it, and the last finds the queue empty.
 	expect(uploads).toHaveLength(2);
-	expect(log).toEqual([expect.stringContaining("answered 500"), `sent 1 records of acme/proj to ${ENDPOINT}`]);
+	expect(log).toEqual([
+		expect.stringContaining("answered 500"),
+		`sent 1 records and 0 breakages of acme/proj to ${ENDPOINT}`,
+	]);
 	expect(pending(env)).toEqual([]);
 });
 
@@ -489,4 +522,168 @@ test("a queued session for an endpoint that refused its token is dropped unsent"
 	await sendPass(later.deps);
 	expect(later.uploads).toEqual([]);
 	expect(pending(env)).toEqual([]);
+});
+
+test("the sender sends the breakages a merged fix in its window names, reading an older culprit", async () => {
+	const env = home();
+	queue(stopped(checkout(ENDPOINT)), env);
+	const fix = {
+		...CULPRIT,
+		number: 8,
+		head: { ref: "fix/c", repo: { full_name: "acme/proj" } },
+		merged_at: "2026-11-06T10:50:00Z",
+		created_at: "2026-11-06T10:20:00Z",
+		updated_at: "2026-11-06T10:50:00Z",
+		closed_at: "2026-11-06T10:50:00Z",
+		body: "## Caused by\n\n- [acme/proj#3](https://github.com/acme/proj/pull/3) - lost a frame (found by the queue)\n",
+	};
+	const { deps, uploads } = sender(env, 200, [session("s1", "quest/m0/a")], () => {}, [fix]);
+	expect(await sendPass(deps)).toEqual([
+		{ endpoint: ENDPOINT, repository: "acme/proj", records: 1, breakages: 1, refused: false },
+	]);
+	expect(parseUpload(uploads[0]!.body).breakages).toEqual([
+		{
+			repository: "acme/proj",
+			culprit: {
+				number: 3,
+				merged: "2026-10-01T00:00:00.000Z",
+				tier: null,
+				size: "M",
+				writers: [{ harness: "Claude Code", model: "claude-opus-5-5", effort: "medium" }],
+				reviewers: [],
+			},
+			fix: 8,
+			incident: null,
+			found: "queue",
+			at: "2026-11-06T10:20:00.000Z",
+		},
+	]);
+});
+
+test("an incident is posted at once, open until reported again with its culprit, and fails loud", async () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	const { deps, uploads } = sender(env, 200, []);
+	const report = (pull: number | null) =>
+		reportIncident(
+			{
+				cwd: root,
+				id: "https://alerts.example/1",
+				found: "canary",
+				pull,
+				at: Date.parse("2026-11-06T12:00:00Z"),
+			},
+			deps,
+		);
+	expect((await report(null)).culprit).toBeNull();
+	expect((await report(3)).culprit).toMatchObject({ number: 3, size: "M" });
+	expect(uploads.map((u) => parseUpload(u.body))).toEqual([
+		{
+			records: [],
+			breakages: [
+				expect.objectContaining({
+					incident: "https://alerts.example/1",
+					culprit: null,
+					fix: null,
+					found: "canary",
+					at: "2026-11-06T12:00:00.000Z",
+				}),
+			],
+		},
+		{ records: [], breakages: [expect.objectContaining({ culprit: expect.objectContaining({ number: 3 }) })] },
+	]);
+	await expect(report(4)).rejects.toThrow("acme/proj has no PR #4");
+	await expect(
+		reportIncident({ cwd: root, id: "x", found: "person", pull: null, at: 0 }, sender(env, 403, []).deps),
+	).rejects.toThrow("answered 403");
+	await expect(
+		reportIncident({ cwd: root, id: "x", found: "person", pull: null, at: 0 }, sender(home(null), 200, []).deps),
+	).rejects.toThrow("holds no token");
+	await expect(
+		reportIncident({ cwd: checkout(), id: "x", found: "person", pull: null, at: 0 }, deps),
+	).rejects.toThrow("names no record endpoint");
+});
+
+test("a fix that merges after its sessions were sent reaches the store with the next session", async () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	queue(stopped(root), env);
+	const fix = (merged: boolean) => ({
+		...CULPRIT,
+		number: 8,
+		head: { ref: "fix/c", repo: { full_name: "acme/proj" } },
+		state: merged ? "closed" : "open",
+		merged_at: merged ? "2026-11-06T12:30:00Z" : null,
+		closed_at: merged ? "2026-11-06T12:30:00Z" : null,
+		created_at: "2026-11-06T10:20:00Z",
+		updated_at: merged ? "2026-11-06T12:30:00Z" : "2026-11-06T10:20:00Z",
+		body: "## Caused by\n\n- [acme/proj#3](https://github.com/acme/proj/pull/3) - lost a frame\n",
+	});
+	const open = sender(env, 200, [session("s1", "quest/m0/a")], () => {}, [fix(false)]);
+	expect((await sendPass(open.deps))[0]).toMatchObject({ records: 1, breakages: 0 });
+	// The next session starts after the fix merged, so its own window alone would miss the fix.
+	writeFileSync(join(root, "later.jsonl"), `{"type":"user","timestamp":"2026-11-06T13:00:00Z"}\n`);
+	queue({ ...stopped(root), session: "s2", transcript: join(root, "later.jsonl") }, env);
+	const later = session("s2", "main", {
+		start: Date.parse("2026-11-06T13:00:00Z"),
+		end: Date.parse("2026-11-06T13:30:00Z"),
+		branches: [
+			{ name: "main", first: Date.parse("2026-11-06T13:00:00Z"), last: Date.parse("2026-11-06T13:30:00Z") },
+		],
+	});
+	const merged = sender(env, 200, [later], () => {}, [fix(true)]);
+	merged.clock.now = Date.parse("2026-11-06T14:00:00Z");
+	await sendPass(merged.deps);
+	expect(parseUpload(merged.uploads[0]!.body).breakages.map((b) => [b.culprit?.number, b.fix])).toEqual([[3, 8]]);
+});
+
+test("an incident reported from a subdirectory as `.`, as with no --root, finds its checkout", async () => {
+	const env = home();
+	const root = checkout(ENDPOINT);
+	mkdirSync(join(root, "sub"));
+	const { deps } = sender(env, 200, []);
+	const before = process.cwd();
+	process.chdir(join(root, "sub"));
+	try {
+		const reported = await reportIncident({ cwd: ".", id: "x", found: "person", pull: null, at: 0 }, deps);
+		expect(reported.repository).toBe("acme/proj");
+	} finally {
+		process.chdir(before);
+	}
+});
+
+test("a merged fix naming an open incident sends one record under the incident, once however many name it", async () => {
+	const env = home();
+	queue(stopped(checkout(ENDPOINT)), env);
+	const fix = (number: number, updated: string) => ({
+		...CULPRIT,
+		number,
+		head: { ref: `fix/${number}`, repo: { full_name: "acme/proj" } },
+		merged_at: updated,
+		created_at: "2026-11-06T10:20:00Z",
+		updated_at: updated,
+		closed_at: updated,
+		body: "## Caused by\n\n- [acme/proj#3](https://github.com/acme/proj/pull/3) - lost a frame (found by canary; incident deploy 42)\n",
+	});
+	const pulls = [fix(9, "2026-11-06T10:55:00Z"), fix(8, "2026-11-06T10:50:00Z")];
+	const { deps, uploads } = sender(env, 200, [session("s1", "quest/m0/a")], () => {}, pulls);
+	await sendPass(deps);
+	expect(parseUpload(uploads[0]!.body).breakages.map((b) => [b.culprit?.number, b.fix, b.incident, b.found])).toEqual(
+		[[3, 9, "deploy 42", "canary"]],
+	);
+});
+
+test("an incident's --at must be a date and time with a Z or offset, on a real calendar day", () => {
+	expect(parseInstant("2026-11-06T10:00:00Z")).toBe(Date.parse("2026-11-06T10:00:00Z"));
+	expect(parseInstant("2026-11-06T10:00+02:00")).toBe(Date.parse("2026-11-06T08:00:00Z"));
+	expect(parseInstant("2024-02-29T10:00:00.5Z")).toBe(Date.parse("2024-02-29T10:00:00.500Z"));
+	for (const text of [
+		"2026-11-06",
+		"2026-11-06T10:00:00",
+		"2026-02-30T10:00:00Z",
+		"2026-11-06T24:00:00Z",
+		"2026-11-06T10:00:00+25:00",
+		"Nov 6 2026 10:00 UTC",
+	])
+		expect(parseInstant(text), text).toBeNull();
 });

@@ -1,3 +1,6 @@
+import { type BreakageRecord, breakageKey, parseBreakage } from "./breakage";
+import { parser } from "./parse";
+
 // The record of one agent session that `quest` sends to Kixel Code, which stores exactly this shape, and that
 // `quest usage` prints. One session is one record: a resend under the same harness and session ID replaces it. A
 // host's one sender uploads a session's copies in order, so the latest upload is the newest copy.
@@ -134,31 +137,25 @@ export interface SessionRecord {
 	split: TimeSplit | null;
 }
 
-/** The body of a record upload. */
+/** The body of a record upload: sessions' records, and the breakages the uploading host knows of. */
 export interface RecordUpload {
 	records: SessionRecord[];
+	breakages: BreakageRecord[];
 }
 
-const fail = (what: string): never => {
-	throw new Error(`malformed session record: ${what}`);
-};
-const isObject = (value: unknown): value is Record<string, unknown> =>
-	typeof value === "object" && value !== null && !Array.isArray(value);
-const text = (value: unknown, what: string): string => (typeof value === "string" && value !== "" ? value : fail(what));
-const maybe = (value: unknown, what: string): string | null => (value === null ? null : text(value, what));
-const count = (value: unknown, what: string): number =>
-	typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fail(what);
-const flag = (value: unknown, what: string): boolean => (typeof value === "boolean" ? value : fail(what));
-const instant = (value: unknown, what: string): string => {
-	const at = text(value, what);
-	return /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/.test(at) && !Number.isNaN(Date.parse(at)) ? at : fail(what);
-};
-const oneOf = <T extends string>(value: unknown, options: readonly T[], what: string): T =>
-	options.includes(value as T) ? (value as T) : fail(what);
-const exact = (value: Record<string, unknown>, keys: string[], what: string) => {
-	const extra = Object.keys(value).find((key) => !keys.includes(key));
-	if (extra !== undefined) fail(`${what} has an unknown field ${extra}`);
-};
+const {
+	fail,
+	isObject,
+	text,
+	maybe,
+	count,
+	flag,
+	instant,
+	oneOf,
+	exact,
+	pull,
+	repository: ownerRepo,
+} = parser("session record");
 
 /** `value` as a record, failing on any missing, extra, or ill-typed field, so a store never keeps one in part. */
 export function parseRecord(value: unknown): SessionRecord {
@@ -184,8 +181,7 @@ export function parseRecord(value: unknown): SessionRecord {
 	const pulls = Array.isArray(value.pulls) ? value.pulls : fail("pulls");
 	const models = Array.isArray(value.models) ? value.models : fail("models");
 	const waits = value.waits === null ? null : Array.isArray(value.waits) ? value.waits : fail("waits");
-	const repository = text(value.repository, "repository");
-	if (!/^[a-z\d._-]+\/[a-z\d._-]+$/.test(repository)) fail("repository is not a lowercase owner/repo");
+	const repository = ownerRepo(value.repository, "repository");
 	const quest = maybe(value.quest, "quest");
 	if (quest !== null && !/^quest\/.+\.md$/.test(quest)) fail("quest is not a quest path");
 	const record: SessionRecord = {
@@ -195,7 +191,7 @@ export function parseRecord(value: unknown): SessionRecord {
 		repository,
 		branch: maybe(value.branch, "branch"),
 		quest,
-		pulls: pulls.map((n) => (Number.isSafeInteger(n) && (n as number) > 0 ? (n as number) : fail("a PR number"))),
+		pulls: pulls.map((n) => pull(n, "a PR number")),
 		role: oneOf(value.role, ROLES, "role"),
 		models: models.map((m: unknown) => {
 			if (!isObject(m)) return fail("a model");
@@ -291,14 +287,20 @@ function parseSplit(value: unknown): TimeSplit {
 /** The longest note a split keeps, in characters. */
 export const NOTE_LIMIT = 300;
 
-/** An upload's body, failing whole on any malformed record, one naming no session, or a session sent twice. */
+/**
+ * An upload's body, failing whole on any malformed record, one naming no session, or a session or breakage sent
+ * twice.
+ */
 export function parseUpload(value: unknown): RecordUpload {
 	if (!isObject(value)) return fail("the upload is not an object");
-	exact(value, ["records"], "the upload");
+	exact(value, ["records", "breakages"], "the upload");
 	if (!Array.isArray(value.records)) return fail("the upload has no record list");
+	if (!Array.isArray(value.breakages)) return fail("the upload has no breakage list");
+	const breakages = value.breakages.map(parseBreakage);
+	if (new Set(breakages.map(breakageKey)).size !== breakages.length) fail("the upload holds a breakage twice");
 	const records = value.records.map(parseRecord);
 	if (records.some((r) => r.session === null)) fail("an uploaded record names no session");
 	const ids = new Set(records.map((r) => `${r.harness}\0${r.session}`));
 	if (ids.size !== records.length) fail("the upload holds a session twice");
-	return { records };
+	return { records, breakages };
 }
