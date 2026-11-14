@@ -42,7 +42,13 @@ Readout, the agent's choices for the implementer to revisit:
 - Start one week after both experiments are live. From `quest usage --json`,
   compute each arm's variance and the number of PRs each arm needs to
   detect a difference worth acting on. If the arms have not reached it,
-  rewrite the `Waiting` item below for the date they will, and stop.
+  rewrite the `Waiting` item below for the date they will, and stop. XL
+  quests are rare, so report how many each XL arm got rather than wait for
+  a detectable difference there (user, 2026-11-13).
+- `quest usage`'s `arms` rollup counts each sized PR whose every
+  `Implementer:` line names the same arm, under its first line's writer,
+  with every session's spend on it. Escapes are too rare to separate the
+  arms (about 2% of PRs): report them alongside, not as the measure.
 - For each writer arm, compare first-round findings from the fixed efforts in
   `src/cli/models.ts`, review rounds, hand-backs, later `## Caused by` culprits, and cost
   per merged PR. For each shadow pair, compare findings the routed reviewer
@@ -54,7 +60,9 @@ Readout, the agent's choices for the implementer to revisit:
   each finding's location from the branch's saved rounds under the clones'
   `.git/quest/review/`. Recommend each table change to the
   maintainer with its tally. End the writer A/B by deleting its arms from
-  `src/cli/models.ts`. Keep the shadow reviewer only if the maintainer
+  `src/cli/models.ts`, with `quest models --arm`, the `arm` field of
+  `quest unblocked --json`, and the arm notes in the README, guide, and
+  `/quest-run` and `/quest-iterate`. Keep the shadow reviewer only if the maintainer
   chooses to.
 - Carry the tallies into [the model check](/quest/m1/model-check.md)'s
   baseline.
@@ -111,7 +119,7 @@ Baseline from the 2026-11-11 audit, at API list price:
 - moq-dev/quest: one week of PRs since both the shadow reviewer
   (`quest review`'s, PR titled "quest: run a shadow reviewer one effort
   below the routed one") and
-  [the writer A/B](/quest/m0/routing-evidence/writer-ab.md) merged; check
+  the writer A/B ([moq-dev/quest#720](https://github.com/moq-dev/quest/pull/720)) merged; check
   their merge dates with `gh pr list --state merged` and the day with `date`
 
 ## Related

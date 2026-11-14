@@ -215,7 +215,7 @@ Leave the worktree you are running in and any holding uncommitted work or refuse
 
 Run each agent at an entry of `quest`'s ranked lists unless the repository's `AGENTS.md` names other models: as a native sub-agent on this session's harness, else through `quest agent`.
 Size each `/quest-iterate` you dispatch as a quest, by the work left on its PR, and name that size in its brief.
-Start it on the PR's writer, the model of its first `Implementer:` line, at the entry `quest models <size> --writer <model>` prints, waiting out its usage limit so the other model can review; a PR whose writer no list names, such as `unknown` or a retired model, takes its size's first entry that can run.
+Start it on the PR's writer, the model of its first `Implementer:` line, at the entry `quest models <size> --writer <model>` prints, or `quest models <PR size> --arm <arm>` when that line names a writer A/B arm, as `(arm B)`, naming the arm in its brief, waiting out its usage limit so the other model can review; a PR whose writer no list names, such as `unknown` or a retired model, takes its size's first entry that can run.
 
 `quest agent start --harness <claude|codex> --model <model> --effort <level> --permission-mode <mode> <worktree> <prompt>` runs a headless agent on that CLI's own login; start it as a background command in its own isolated worktree, so the harness reports its exit like a sub-agent's.
 `--permission-mode` is Claude Code's permission mode, or Codex's sandbox mode.

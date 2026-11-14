@@ -3,6 +3,7 @@
 // named; quest ties each to a PR by the branches and repositories token-max exports for it.
 import { spawnSync } from "node:child_process";
 import { type RecordedRisk, type Size, SIZES, TIERS, type Tier, handedBack, questBranch, recordedRisk } from "../core";
+import type { Arm } from "./models";
 import { recorded } from "./models-record";
 import { type ClaimDependencies, upstream } from "./claims";
 import { repositoryPath } from "../github/client";
@@ -79,7 +80,7 @@ export interface PullRow {
 	/** Its body has a `## Waiting` section, so it was handed back to the maintainer. */
 	handedBack: boolean;
 	size: Size | null;
-	implementers: { harness: string; model: string; effort: string; size: Size | null }[];
+	implementers: { harness: string; model: string; effort: string; size: Size | null; arm: Arm | null }[];
 	/** The `Implementer:` items it cannot read, which count toward no implementer. */
 	unread: string[];
 	/** Each reviewer the PR's `## Review` record names, with its latest round and its tally. */
@@ -157,6 +158,15 @@ export interface ReviewerRow {
 	spent: Spend;
 }
 
+/** One writer A/B arm at one size, over the PRs every Implementer line of which names it. */
+export interface ArmRow extends Omit<AccuracyRow, "size" | "spent"> {
+	size: Size;
+	arm: Arm;
+	/** The sessions on its PRs in every role, and their spend. */
+	sessions: number;
+	spend: Tokens;
+}
+
 /** The PRs of one risk tier, or of none (`tier` null): how many merged, how many a reviewer raised, and later fixed. */
 export interface TierRow {
 	tier: Tier | null;
@@ -192,6 +202,8 @@ export interface Usage {
 	spend: SpendRow[];
 	accuracy: AccuracyRow[];
 	reviewers: ReviewerRow[];
+	/** The writer A/B's arms, while it runs. */
+	arms: ArmRow[];
 	tiers: TierRow[];
 	online: OnlineRow[];
 	/** The sessions on no PR reported here, from every repository and agent token-max reads; null when narrowed. */
@@ -483,7 +495,7 @@ function owners(sessions: Session[]): (session: Session) => string[] | null {
 /**
  * Attribute each session to the PR whose head branch it last named, among those still open when the session
  * reached the branch and headed from a repository its host resolved for it, else to its parent's PR, as a sub-agent
- * in a detached checkout. Give it a role: classifying when a PR's review record names it as the risk classifier,
+ * in a detached checkout, unless its repository is known to be another. Give it a role: classifying when a PR's review record names it as the risk classifier,
  * reviewing when the record names it as a reviewer or Codex marks it a review, its parent's when both share the PR,
  * as a review's sub-agents do, else implementing when its first request in the window came before its PR opened,
  * and iterating otherwise. `evidence` holds every exported copy, folded ones included, since a dropped copy may be
@@ -527,7 +539,13 @@ function attribute(
 		const parent = session.parent === null ? undefined : byId.get(id(session.harness, session.parent));
 		// A parent chain that loops back is cut there, so its sessions place by their own branches.
 		const above = parent === undefined || seen.has(parent) ? null : place(parent, new Set([...seen, session]));
-		const pull = own(session) ?? above?.pull;
+		// A session known to be in another repository keeps out of its parent's PR, as a sub-agent in another checkout.
+		const known = owned(session);
+		const inherited =
+			above && (known === null || (above.pull.repository !== null && known.includes(above.pull.repository)))
+				? above.pull
+				: undefined;
+		const pull = own(session) ?? inherited;
 		let result: Placed = null;
 		if (pull)
 			result = {
@@ -692,6 +710,41 @@ function part(tokens: Tokens, n: number): Tokens {
  * record holds the latest tally, as the most rounds show, since each round rewrites only its own PR's record; the
  * newest breaks a tie. A deleted fork has no repository, so its PR stands alone.
  */
+const noOutcomes = (): Omit<AccuracyRow, "size" | "harness" | "model" | "effort" | "spent"> => ({
+	pulls: 0,
+	merged: 0,
+	handedBack: 0,
+	reviewed: 0,
+	scored: 0,
+	score: 0,
+	tally: noCounts(),
+	firstRounds: noFirst(),
+	landFixes: 0,
+	fixes: 0,
+});
+
+/** Add a PR's outcomes to a writer's or arm's row, counting its tallies only when it is its branch's `latest`. */
+function outcome(row: ReturnType<typeof noOutcomes>, each: PullRow, latest: Set<PullRow>) {
+	row.pulls++;
+	if (each.state === "merged") row.merged++;
+	if (each.handedBack) row.handedBack++;
+	row.fixes += each.fixedBy.length;
+	row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
+	// The shadow's findings measure an effort step, not the writer, so they stay out of the writer's row.
+	const counted = latest.has(each) ? each.review.filter((review) => review.tally !== null && !review.shadow) : [];
+	if (counted.length === 0) return;
+	row.reviewed++;
+	for (const { score } of counted)
+		if (score !== null) {
+			row.scored++;
+			row.score += score;
+		}
+	count(
+		row,
+		counted.map((review) => review.tally!),
+	);
+}
+
 function tallied(pulls: PullRow[], counts: (pull: PullRow) => boolean): Set<PullRow> {
 	const branch = (each: PullRow) => JSON.stringify([each.repository ?? each.number, each.branch]);
 	const rounds = (each: PullRow) =>
@@ -717,8 +770,8 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 		// A session that pushed twice is one implementer of the PR, whether or not each line names its size.
 		const distinct = [
 			...new Map(
-				each.implementers.map((i) => {
-					const at = { ...i, size: i.size ?? each.size };
+				each.implementers.map(({ harness, model, effort, size }) => {
+					const at = { harness, model, effort, size: size ?? each.size };
 					return [JSON.stringify(at), at];
 				}),
 			).values(),
@@ -738,46 +791,18 @@ function accuracyRows(pulls: PullRow[]): AccuracyRow[] {
 					harness: implementer.harness,
 					model: implementer.model,
 					effort: implementer.effort,
-					pulls: 0,
-					merged: 0,
-					handedBack: 0,
-					reviewed: 0,
-					scored: 0,
-					score: 0,
-					tally: noCounts(),
-					firstRounds: noFirst(),
-					landFixes: 0,
-					fixes: 0,
+					...noOutcomes(),
 					spent: noSpend(),
 				};
 				rows.set(id, row);
 			}
-			row.pulls++;
-			if (each.state === "merged") row.merged++;
-			if (each.handedBack) row.handedBack++;
-			row.fixes += each.fixedBy.length;
-			row.landFixes += each.landFixes.filter((by) => by !== MERGER).length;
+			outcome(row, each, latest);
 			const spent = shares.get(i);
 			if (spent) {
 				row.spent.pulls++;
 				row.spent.split += spent.split;
 				add(row.spent, spent);
 			}
-			// The shadow's findings measure an effort step, not the writer, so they stay out of the writer's row.
-			const counted = latest.has(each)
-				? each.review.filter((review) => review.tally !== null && !review.shadow)
-				: [];
-			if (counted.length === 0) continue;
-			row.reviewed++;
-			for (const { score } of counted)
-				if (score !== null) {
-					row.scored++;
-					row.score += score;
-				}
-			count(
-				row,
-				counted.map((review) => review.tally!),
-			);
 		}
 	}
 	return [...rows.values()].sort((a, b) =>
@@ -839,6 +864,36 @@ function reviewerRows(pulls: PullRow[]): ReviewerRow[] {
 			[a.size, a.harness, a.model, a.effort, String(a.shadow)],
 			[b.size, b.harness, b.model, b.effort, String(b.shadow)],
 		),
+	);
+}
+
+/**
+ * The writer A/B's rollup: each sized PR whose every Implementer line names the same arm counts in it, under the
+ * size and writer its first line names, with every session's spend on it; a writer off its arm, such as a fallback
+ * that names none, leaves its PR in neither.
+ */
+function armRows(pulls: PullRow[]): ArmRow[] {
+	const rows = new Map<string, ArmRow>();
+	const latest = tallied(pulls, (each) => each.implementers.length > 0);
+	for (const each of pulls) {
+		const first = each.implementers[0];
+		if (!first?.arm || each.size === null || each.unread.length > 0) continue;
+		if (each.implementers.some((implementer) => implementer.arm !== first.arm)) continue;
+		const { harness, model, effort, arm } = first;
+		const id = JSON.stringify([each.size, arm, harness, model, effort]);
+		let row = rows.get(id);
+		if (!row) {
+			row = { size: each.size, arm, harness, model, effort, ...noOutcomes(), sessions: 0, spend: zero() };
+			rows.set(id, row);
+		}
+		outcome(row, each, latest);
+		for (const session of each.sessions) {
+			row.sessions++;
+			for (const spent of session.models) add(row.spend, spent);
+		}
+	}
+	return [...rows.values()].sort((a, b) =>
+		order([a.size, a.arm, a.harness, a.model, a.effort], [b.size, b.arm, b.harness, b.model, b.effort]),
 	);
 }
 
@@ -961,6 +1016,7 @@ export async function usage(root: string, options: UsageOptions, deps: UsageDepe
 		spend: spendRows(rows),
 		accuracy: accuracyRows(rows),
 		reviewers: reviewerRows(rows),
+		arms: armRows(rows),
 		tiers: tierRows(rows),
 		online: onlineRows(rows),
 		unattributed,
@@ -1020,8 +1076,10 @@ export function usageLines(report: Usage): string[] {
 			lines.push(
 				`  risk: ${row.risk.tier}, ${row.risk.reason}${row.risk.tier === row.risk.classified ? "" : `; raised from ${row.risk.classified} by a reviewer`}`,
 			);
-		for (const i of row.implementers)
-			lines.push(`  implementer: ${i.harness}, ${i.model}, ${i.effort} effort${i.size ? ` (${i.size})` : ""}`);
+		for (const i of row.implementers) {
+			const notes = [i.size, i.arm && `arm ${i.arm}`].filter(Boolean).join(", ");
+			lines.push(`  implementer: ${i.harness}, ${i.model}, ${i.effort} effort${notes ? ` (${notes})` : ""}`);
+		}
 		for (const item of row.unread) lines.push(`  unread: ${item}`);
 		for (const r of row.review)
 			lines.push(
@@ -1088,6 +1146,22 @@ export function usageLines(report: Usage): string[] {
 					r.model,
 					`${r.effort}${r.shadow ? ", shadow" : ""}`,
 					`${r.reviewed} reviewed: rounds ${mean(r.tally.rounds, r.reviewed)}, ${findingsText({ ...r.tally, first: null })}, ${firsts(r.firstRounds)}; ${per(r.spent, "PR reviewed")}`,
+				]),
+			),
+		);
+	if (report.arms.length)
+		lines.push(
+			"",
+			"Writer A/B by size and arm:",
+			...table(
+				report.arms.map((a) => [
+					" ",
+					a.size,
+					a.arm,
+					a.harness,
+					a.model,
+					a.effort,
+					`${a.pulls} PRs, ${a.merged} merged, ${a.handedBack} handed back, ${a.reviewed} reviewed: rounds ${mean(a.tally.rounds, a.reviewed)}, ${findingsText({ ...a.tally, first: null })}, ${firsts(a.firstRounds)}; ${a.fixes} later fixes; ${a.sessions} sessions, ${tokens(a.spend)}`,
 				]),
 			),
 		);

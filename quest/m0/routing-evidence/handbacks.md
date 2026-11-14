@@ -32,6 +32,4 @@ count in the `accuracy` and per-PR rows as today.
 
 ## Related
 
-- [Writer A/B](/quest/m0/routing-evidence/writer-ab.md) - compares
-  hand-backs per arm
 - [Model check](/quest/m1/model-check.md) - charts hand-backs per PR
