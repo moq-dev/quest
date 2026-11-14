@@ -11,6 +11,8 @@ import {
 	type Round,
 	type Settled,
 	type Tally,
+	UnansweredError,
+	ask,
 	authored,
 	baseInstructions,
 	claudeFlags,
@@ -1619,6 +1621,33 @@ fakes(
 	},
 	20_000,
 );
+
+fakes("a question no model answers usably throws with what each reply took", async () => {
+	const s = setup();
+	const entries = [
+		{ harness: "claude" as const, model: "claude-haiku-5-5", effort: "low" },
+		{ harness: "codex" as const, model: "gpt-6.1-sol", effort: "low" },
+	];
+	const error = await ask(entries, {
+		cwd: s.repo,
+		dir: tempDir(),
+		env: process.env,
+		instructions: "i",
+		schema: {},
+		prompt: "p",
+		tools: "",
+		who: "time splitter",
+		task: "split the session's time",
+		parse: () => {
+			throw new Error("unusable");
+		},
+	}).catch((each: unknown) => each);
+	expect(error).toBeInstanceOf(UnansweredError);
+	expect((error as UnansweredError).spent).toEqual([
+		{ entry: entries[0], usage: { input: 40, cached: 0, output: 3 } },
+		{ entry: entries[1], usage: { input: 40, cached: 0, output: 3 } },
+	]);
+});
 
 fakes("a reviewer raises the tier, and the record keeps the classifier's beside it", async () => {
 	const s = setup();

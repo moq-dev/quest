@@ -16,7 +16,7 @@ import {
 } from "../core";
 import { eachLine, parseLine } from "./messages";
 import { type Model, SPLITTERS, SPLIT_CHECKERS } from "./models";
-import { type Answer, type Question, ReviewInputError, ReviewLimitError } from "./review";
+import { type Answer, type Question, ReviewInputError, ReviewLimitError, UnansweredError } from "./review";
 
 /** The categories a model may pick; `idle` is measured, never judged. */
 export const LABELS = SPLIT_CATEGORIES.filter((c) => c !== "idle") as Exclude<SplitCategory, "idle">[];
@@ -453,9 +453,9 @@ export interface SplitDependencies {
 	env: NodeJS.ProcessEnv;
 }
 
-/** Add every turn that answered, unusable ones included, to `usage` by model. */
-function addUsage(usage: SplitUsage[], answer: Answer<unknown>): void {
-	for (const turn of answer.spent) {
+/** Add each turn that replied, unusable ones included, to `usage` by model. */
+function addUsage(usage: SplitUsage[], spent: Answer<unknown>["spent"]): void {
+	for (const turn of spent) {
 		const { harness, model, effort } = turn.entry;
 		let row = usage.find((u) => u.harness === harness && u.model === model && u.effort === effort);
 		if (!row) {
@@ -467,6 +467,9 @@ function addUsage(usage: SplitUsage[], answer: Answer<unknown>): void {
 		row.output += turn.usage?.output ?? 0;
 	}
 }
+
+/** The turns a question no model answered usably still spent. */
+const spentBy = (error: unknown): Answer<unknown>["spent"] => (error instanceof UnansweredError ? error.spent : []);
 
 /**
  * Label every action of `harness` session `session` not labeled yet, one part per prompt, keeping the labels after
@@ -495,18 +498,30 @@ export async function labelSession(
 	});
 	for (const part of parts(steps, labeled.labels.length)) {
 		const prompt = splitPrompt(steps, part);
-		const answer = await deps.ask(SPLITTERS, question(prompt, "time splitter", part));
+		let answer: Answer<Parsed>;
+		try {
+			answer = await deps.ask(SPLITTERS, question(prompt, "time splitter", part));
+		} catch (error) {
+			// The part stays unlabeled, but what its unusable replies took is kept.
+			const spent = spentBy(error);
+			if (spent.length) {
+				addUsage(labeled.usage, spent);
+				writeLabeled(path, labeled);
+			}
+			throw error;
+		}
 		const { labels, note } = answer.value;
-		addUsage(labeled.usage, answer);
+		addUsage(labeled.usage, answer.spent);
 		if (sampled(harness, session, part.from)) {
 			// The check only measures the splitter, so a check no model could give leaves the part unchecked
 			// rather than costing the labels already paid for.
 			try {
 				const check = await deps.ask(SPLIT_CHECKERS, question(prompt, "time split checker", part));
 				labeled.checks.push({ from: part.from, labels: check.value.labels });
-				addUsage(labeled.usage, check);
+				addUsage(labeled.usage, check.spent);
 			} catch (error) {
 				if (!(error instanceof ReviewInputError || error instanceof ReviewLimitError)) throw error;
+				addUsage(labeled.usage, spentBy(error));
 			}
 		}
 		labeled.labels.push(...labels);

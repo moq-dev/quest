@@ -5,7 +5,7 @@ import { describe, expect, test } from "vitest";
 
 import { NOTE_LIMIT, SPLIT_CATEGORIES, type SessionRecord, type SessionWait, parseRecord } from "../src/core";
 import { SPLITTERS, SPLIT_CHECKERS, type Model } from "../src/cli/models";
-import { type Answer, type Question, ReviewInputError, ReviewLimitError } from "../src/cli/review";
+import { type Answer, type Question, ReviewInputError, ReviewLimitError, UnansweredError } from "../src/cli/review";
 import {
 	type Labeled,
 	keptSplit,
@@ -295,14 +295,21 @@ describe("splitOf", () => {
 
 /**
  * A fake model that labels every action of a part `label`, parsing its reply as `ask` does, recording which list and
- * prompt it was asked; with `checkerFails`, every checker is at its usage limit.
+ * prompt it was asked; with `checkerFails`, every checker is at its usage limit or replies unusably.
  */
-function fakeAsk(label = "writing", checkerFails = false) {
+function fakeAsk(label = "writing", checkerFails?: "limited" | "unusable") {
 	const asked: { entries: readonly Model[]; prompt: string }[] = [];
 	const ask = async <T>(entries: readonly Model[], question: Question<T>): Promise<Answer<T>> => {
 		asked.push({ entries, prompt: question.prompt });
 		expect(question.tools).toBe("");
-		if (checkerFails && entries === SPLIT_CHECKERS) throw new ReviewLimitError("claude", null, entries[0]!.model);
+		if (checkerFails === "limited" && entries === SPLIT_CHECKERS)
+			throw new ReviewLimitError("claude", null, entries[0]!.model);
+		// Both checkers replied, unusably, as `ask` then throws with what they spent.
+		if (checkerFails === "unusable" && entries === SPLIT_CHECKERS)
+			throw new UnansweredError(
+				"no time split checker could split the session's time",
+				entries.map((entry) => ({ entry, usage: { input: 7, cached: 0, output: 2 } })),
+			);
 		const [, from, to] = /Label every numbered action from #(\d+) to #(\d+)/.exec(question.prompt)!;
 		const usage = { input: 100, cached: 40, output: 10 };
 		return {
@@ -385,13 +392,55 @@ describe("labelSession", () => {
 		let id = 0;
 		while (!sampled("claude", `s${id}`, 0)) id++;
 		const state = tempDir();
-		const { ask, asked } = fakeAsk("writing", true);
+		const { ask, asked } = fakeAsk("writing", "limited");
 		const labeled = await labelSession("claude", `s${id}`, readSteps("claude", [path]), { ask, state, env: {} });
 		expect(asked.map((a) => a.entries)).toEqual([SPLITTERS, SPLIT_CHECKERS]);
 		expect([labeled.labels.length, labeled.checks]).toEqual([3, []]);
 		expect(
 			keptSplit(state, { harness: "claude", id: `s${id}`, files: [path], skippedLines: 0 }, [])?.check,
 		).toBeNull();
+	});
+
+	test("what unusable replies took is kept, from a failed check or a part left unlabeled", async () => {
+		const path = claudeTranscript();
+		let id = 0;
+		while (!sampled("claude", `s${id}`, 0)) id++;
+		const state = tempDir();
+		const checked = await labelSession("claude", `s${id}`, readSteps("claude", [path]), {
+			ask: fakeAsk("writing", "unusable").ask,
+			state,
+			env: {},
+		});
+		expect(checked.checks).toEqual([]);
+		expect(checked.usage.map((u) => [u.model, u.input, u.output])).toEqual([
+			[SPLITTERS[0]!.model, 100, 10],
+			...SPLIT_CHECKERS.map((e) => [e.model, 7, 2]),
+		]);
+		expect(
+			keptSplit(state, { harness: "claude", id: `s${id}`, files: [path], skippedLines: 0 }, [])?.usage,
+		).toEqual(checked.usage);
+
+		// Every splitter replied unusably: the part stays unlabeled, its cost kept for the record that labels it.
+		const other = tempDir();
+		const ask = async (): Promise<never> => {
+			throw new UnansweredError(
+				"no time splitter could split the session's time",
+				SPLITTERS.map((entry) => ({ entry, usage: { input: 3, cached: 1, output: 1 } })),
+			);
+		};
+		await expect(
+			labelSession("claude", "s1", readSteps("claude", [path]), { ask, state: other, env: {} }),
+		).rejects.toThrow("no time splitter");
+		const later = await labelSession("claude", "s1", readSteps("claude", [path]), {
+			ask: fakeAsk().ask,
+			state: other,
+			env: {},
+		});
+		expect(later.usage.find((u) => u.model === SPLITTERS[1]!.model)).toMatchObject({
+			input: 3,
+			cached: 1,
+			output: 1,
+		});
 	});
 
 	test("a transcript token-max could not read all of has no split", async () => {

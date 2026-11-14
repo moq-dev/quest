@@ -39,6 +39,16 @@ import { save } from "./worktree";
 
 /** A mistake in the arguments, checkout, or environment, reported as a usage error. */
 export class ReviewInputError extends Error {}
+/** No model could answer a question, with the turns that replied unusably, which the caller may still count. */
+export class UnansweredError extends ReviewInputError {
+	constructor(
+		message: string,
+		readonly spent: Answer<unknown>["spent"],
+	) {
+		super(message);
+	}
+}
+
 /** `--responses` is missing after a round with findings, or given with no round to answer. */
 export class ResponsesError extends ReviewInputError {}
 
@@ -1726,18 +1736,23 @@ export async function ask<T>(entries: readonly Model[], question: Question<T>): 
 		}
 		return { entry, session: reply.session!, value, usage, spent };
 	}
-	throw unanswered(failures, question);
+	throw unanswered(failures, question, spent);
 }
 
 /**
  * Why no model answered: the usage limit that resets first when every one hit its own, so a caller waits for the
  * earliest, else each model's reason.
  */
-function unanswered(failures: (ReviewInputError | ReviewLimitError)[], { who, task }: Question<unknown>): Error {
+function unanswered(
+	failures: (ReviewInputError | ReviewLimitError)[],
+	{ who, task }: Question<unknown>,
+	spent: Answer<unknown>["spent"],
+): Error {
 	const limits = failures.filter((each) => each instanceof ReviewLimitError);
+	// Every model at its limit replied to nothing, so nothing was spent.
 	if (limits.length > 0 && limits.length === failures.length)
 		return limits.sort((a, b) => (a.until ?? Infinity) - (b.until ?? Infinity))[0]!;
-	return new ReviewInputError(`no ${who} could ${task}: ${failures.map((each) => each.message).join("; ")}`);
+	return new UnansweredError(`no ${who} could ${task}: ${failures.map((each) => each.message).join("; ")}`, spent);
 }
 
 /**
