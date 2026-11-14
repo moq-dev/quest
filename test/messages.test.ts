@@ -316,7 +316,10 @@ describe("readClaudeMessages", () => {
 		const path = join(tempDir(), `${SESSION}.jsonl`);
 		const partial = JSON.stringify(turn("2026-11-06T09:00:00Z", "lost")).slice(0, -10);
 		const cut = JSON.stringify({ type: "assistant", message: { content: "long reply" } }).slice(0, 30);
-		writeFileSync(path, `${partial}\n${cut}\n{"type":"user","message":{"content":"lost"}\n${lines(turn("2026-11-06T09:01:00Z", "kept"))}`);
+		writeFileSync(
+			path,
+			`${partial}\n${cut}\n{"type":"user","message":{"content":"lost"}\n${lines(turn("2026-11-06T09:01:00Z", "kept"))}`,
+		);
 		expect(() => readClaudeMessages(path, SESSION, SINCE, plain)).toThrow(/not JSON/);
 		let skipped = 0;
 		const found = readClaudeMessages(path, SESSION, SINCE, plain, () => skipped++);
