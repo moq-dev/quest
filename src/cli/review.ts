@@ -146,6 +146,8 @@ export interface Classified extends Assessment {
 /** The head's risk after a run: the classifier's tier, raised to the riskiest a reviewer judged it. */
 export interface Risk extends Assessment {
 	classified: Classified;
+	/** The seat of the reviewer whose raise set the tier, when one did. */
+	raisedBy?: SeatId;
 }
 
 const ASSESSMENT = {
@@ -1378,7 +1380,7 @@ function load(path: string): unknown {
 }
 
 /** A reviewer's seat on a branch: its harness, and whether it is the shadow. */
-type SeatId = { reviewer: HarnessName; shadow?: true };
+export type SeatId = { reviewer: HarnessName; shadow?: true };
 const seatKey = (seat: SeatId) => `${seat.reviewer}${seat.shadow ? " shadow" : ""}`;
 /** Whether two reviewers hold the same seat: the same harness, both the shadow or neither. */
 export const sameSeat = (a: SeatId, b: SeatId) => seatKey(a) === seatKey(b);
@@ -1428,6 +1430,8 @@ export function parseState(value: unknown): State {
 				session.rounds.every((round) => Array.isArray(round?.findings)) &&
 				typeof session.last === "object" &&
 				session.last !== null &&
+				(session.last.raised === undefined ||
+					(TIERS.includes(session.last.raised?.tier) && typeof session.last.raised.reason === "string")) &&
 				typeof session.given === "object" &&
 				session.given !== null,
 		) &&
@@ -1634,11 +1638,20 @@ function unclassified(failures: (ReviewInputError | ReviewLimitError)[]): Error 
 	);
 }
 
-/** The head's risk after a run's `rounds`: the classifier's tier, raised to the riskiest a round judged it, the first on a tie. */
+/**
+ * The head's risk after `rounds`, each of the head: the classifier's tier, raised to the riskiest a round judged it,
+ * the first on a tie.
+ */
 export function settle(classified: Classified, rounds: Round[]): Risk {
-	let risk: Assessment = classified;
-	for (const round of rounds) if (round.raised && riskier(round.raised.tier, risk.tier)) risk = round.raised;
-	return { tier: risk.tier, reason: risk.reason, classified };
+	let risk: Risk = { tier: classified.tier, reason: classified.reason, classified };
+	for (const round of rounds)
+		if (round.raised && riskier(round.raised.tier, risk.tier))
+			risk = {
+				...round.raised,
+				classified,
+				raisedBy: { reviewer: round.reviewer, ...(round.shadow && { shadow: true }) },
+			};
+	return risk;
 }
 
 /**
@@ -1811,7 +1824,9 @@ export async function review(options: ReviewOptions, deps: ReviewDependencies): 
 		classified: { key: classified.key, value },
 	} satisfies State);
 	const rounds = done.map((each) => each.round);
-	return { rounds, tallies, risk: settle(classified.value, rounds) };
+	// A reviewer this run left out, such as a shadow with nothing to settle, still judged the head its last round reviewed.
+	const standing = kept.map((session) => session.last).filter((round) => round.head === head);
+	return { rounds, tallies, risk: settle(classified.value, [...rounds, ...standing]) };
 }
 
 /**

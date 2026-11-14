@@ -121,6 +121,10 @@ export function reviewRecord({ rounds, tallies, risk }: Reviewed): string {
 			reviewerLine(tally),
 			// Its session, still named so `quest usage` counts it as reviewing.
 			...(tally.session === undefined ? [] : [`- Session: ${code(tally.session)}`]),
+			// Its last round reviewed this head, so its raise still holds.
+			...(risk.raisedBy && sameSeat(risk.raisedBy, tally)
+				? [`- Raised the risk to ${risk.tier}: ${code(risk.reason)}`]
+				: []),
 			`- Rounds: ${tally.rounds}; ${findingsText(counted(tally))}`,
 		);
 	return lines.join("\n");

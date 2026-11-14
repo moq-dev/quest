@@ -43,7 +43,8 @@ const CLAUDE_LOGGED_OUT =
 /**
  * The findings turn's reply, `reply`: FAKE_REPLY, or one finding. A JSON reply without `earlier` settles
  * each earlier finding the prompt numbers as FAKE_DISPOSITION says, `fixed` by default, and one without `risk`
- * reports FAKE_RAISE's tier, else the tier the prompt says the change was classified.
+ * reports FAKE_RAISE's tier, else the tier the prompt says the change was classified. FAKE_RAISE as
+ * `<tier>@<effort>` raises only in turns at that effort.
  */
 const REPLY = `
 const listed = /<earlier-findings>\\n([\\s\\S]*?)\\n<\\/earlier-findings>/.exec(stdin)?.[1] ?? "";
@@ -53,8 +54,12 @@ const earlier = [...listed.matchAll(/^(\\d+)\\. /gm)].map((m) => ({
 	reason: "Checked against the head.",
 }));
 const classified = /was classified (low|medium|high) risk/.exec(stdin)?.[1] ?? "medium";
-const risk = process.env.FAKE_RAISE
-	? { tier: process.env.FAKE_RAISE, reason: "It rewrites the wire format peers read." }
+const [raise, raiseAt] = (process.env.FAKE_RAISE ?? "").split("@");
+const effort = argv.includes("--effort")
+	? argv[argv.indexOf("--effort") + 1]
+	: JSON.parse((argv.find((arg) => arg.startsWith("model_reasoning_effort=")) ?? "=null").split("=")[1]);
+const risk = raise && (!raiseAt || raiseAt === effort)
+	? { tier: raise, reason: "It rewrites the wire format peers read." }
 	: { tier: classified, reason: "As classified." };
 let reply = process.env.FAKE_REPLY ?? JSON.stringify({ score: 8, rationale: "Lands once the off-by-one is fixed.", findings: [${JSON.stringify(FINDING)}] });
 try {
@@ -1620,6 +1625,47 @@ fakes("a reviewer raises the tier, and the record keeps the classifier's beside 
 		expect(lower.code, lower.stderr).toBe(0);
 		expect(lower.stdout).toContain("\nrisk medium It changes what the library returns.\n");
 		expect(lower.stdout).not.toContain("\nraised ");
+	} finally {
+		vi.unstubAllGlobals();
+	}
+});
+
+fakes("a raise from a reviewer the run leaves out holds while its last round reviewed the head", async () => {
+	const s = setup();
+	const pull = { number: 7, body: "Fixes averaging.\n\n## Models\n\n- Size: S\n" };
+	onGitHub(s.repo, [pull]);
+	vi.stubEnv("FAKE_REPLY", JSON.stringify({ score: 10, rationale: "Lands as is.", findings: [] }));
+	// Only the shadow, Sol at low effort for an S PR, raises the tier.
+	vi.stubEnv("FAKE_RAISE", "high@low");
+	const raised = "\nrisk high It rewrites the wire format peers read.\n";
+	const block = [
+		"- Reviewer: Codex, gpt-6.1-sol, low effort, shadow",
+		"- Session: `thread-1`",
+		"- Raised the risk to high: `It rewrites the wire format peers read.`",
+		"- Rounds: 1;",
+	].join("\n");
+	try {
+		const first = await quest("--root", s.repo, "review");
+		expect(first.code, first.stderr).toBe(0);
+		expect(first.stdout).toContain(raised);
+		expect(first.stdout).toContain(" low shadow\n");
+
+		// The same head repeats the pick's clean round and leaves out the shadow, whose raise still covers it.
+		vi.stubEnv("FAKE_RAISE", undefined);
+		const again = await quest("--root", s.repo, "review");
+		expect(again.code, again.stderr).toBe(0);
+		expect(again.stdout).not.toContain(" shadow\n");
+		expect(again.stdout).toContain(raised);
+		expect(pull.body).toContain(block);
+		expect(recordedRisk(pull.body)).toMatchObject({ tier: "high", classified: "medium" });
+
+		// A new head is the pick's alone to judge.
+		write(s.repo, "src/lib.ts", "export const x = 3;\n");
+		git(s.repo, "commit", "-qam", "another constant");
+		const moved = await quest("--root", s.repo, "review");
+		expect(moved.code, moved.stderr).toBe(0);
+		expect(moved.stdout).toContain("\nrisk medium the base has no RISK.md");
+		expect(pull.body).not.toContain("- Raised the risk");
 	} finally {
 		vi.unstubAllGlobals();
 	}

@@ -53,7 +53,10 @@ const segmentSource = (segment: string) => escape(segment).replace(/\*/g, "[^/]*
 
 /** Whether `path` matches `pattern`, as {@link patternError} defines one, or lies under a directory it matches. */
 export function matches(pattern: string, path: string): boolean {
-	const segments = (pattern.endsWith("/") ? pattern.slice(0, -1) : pattern).split("/");
+	// Adjacent `**` segments match what one does.
+	const segments = (pattern.endsWith("/") ? pattern.slice(0, -1) : pattern)
+		.split("/")
+		.filter((segment, index, all) => segment !== "**" || all[index - 1] !== "**");
 	let source = "";
 	segments.forEach((segment, index) => {
 		const last = index === segments.length - 1;

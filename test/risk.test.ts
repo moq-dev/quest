@@ -25,6 +25,13 @@ test("a pattern is a path from the root whose * stays in a segment and whose ** 
 		["src/**", "src", true],
 		["src/**", "src/a/b", true],
 		["**", "anything/at/all", true],
+		// Adjacent `**` segments match what one does.
+		["**/**/wire.proto", "wire.proto", true],
+		["**/**/wire.proto", "a/b/wire.proto", true],
+		["src/**/**/wire.ts", "src/wire.ts", true],
+		["src/**/**/wire.ts", "src/a/wire.ts", true],
+		["src/**/**", "src/a/b", true],
+		["src/**/**", "lib/a", false],
 		// Regular expression characters are literal.
 		["a.b+c", "a.b+c", true],
 		["a.b+c", "aXbbc", false],
