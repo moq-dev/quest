@@ -39,6 +39,16 @@ import { save } from "./worktree";
 
 /** A mistake in the arguments, checkout, or environment, reported as a usage error. */
 export class ReviewInputError extends Error {}
+/** No model could answer a question, with the turns that replied unusably, which the caller may still count. */
+export class UnansweredError extends ReviewInputError {
+	constructor(
+		message: string,
+		readonly spent: Answer<unknown>["spent"],
+	) {
+		super(message);
+	}
+}
+
 /** `--responses` is missing after a round with findings, or given with no round to answer. */
 export class ResponsesError extends ReviewInputError {}
 
@@ -423,6 +433,11 @@ export interface Context {
 	schemaFile: string;
 	/** The gateway Codex sends its requests to, from OPENAI_BASE_URL, which Codex itself no longer reads. */
 	openaiBaseUrl?: string;
+	/**
+	 * The tools Claude may call, comma-separated; a reviewer's by default. Empty asks a question about data alone,
+	 * which Codex answers with its tools off.
+	 */
+	tools?: string;
 }
 
 interface Turn {
@@ -636,7 +651,7 @@ export function claudeFlags(context: Context): string[] {
 		"",
 		"--strict-mcp-config",
 		"--tools",
-		"Read,Grep,Glob,Bash,Agent",
+		context.tools ?? "Read,Grep,Glob,Bash,Agent",
 		"--append-system-prompt",
 		context.instructions,
 		"--model",
@@ -735,8 +750,29 @@ const codex: Reviewer = {
 	},
 };
 
+/**
+ * What turns off every Codex tool that reaches past the reply, for a question about data alone: the read-only
+ * sandbox still lets a shell read any file, and the rest reach the web or start other agents.
+ */
+const CODEX_NO_TOOLS = [
+	...[
+		"shell_tool",
+		"unified_exec",
+		"multi_agent",
+		"image_generation",
+		"browser_use",
+		"computer_use",
+		"goals",
+		"view_image",
+	].flatMap((feature) => ["-c", `features.${feature}=false`]),
+	"-c",
+	'web_search="disabled"',
+	// Such a question runs outside any checkout, which Codex otherwise refuses.
+	"--skip-git-repo-check",
+];
+
 /** Codex takes model settings as TOML values; a JSON string is a valid TOML string. */
-function codexFlags(context: Context): string[] {
+export function codexFlags(context: Context): string[] {
 	return [
 		"-c",
 		'sandbox_mode="read-only"',
@@ -750,6 +786,11 @@ function codexFlags(context: Context): string[] {
 		"skills.include_instructions=false",
 		"-c",
 		`developer_instructions=${JSON.stringify(context.instructions)}`,
+		// The user's connected apps, such as mail or a forge with write access, are no reviewer's business, and a
+		// change under review could ask for them.
+		"-c",
+		"features.apps=false",
+		...(context.tools === "" ? CODEX_NO_TOOLS : []),
 		"-m",
 		context.model,
 		"-c",
@@ -1593,55 +1634,125 @@ export async function classify(input: Classifying): Promise<{ key: string; value
 	const diff = (args: string[]) =>
 		git(root, ["diff", "--no-ext-diff", "--no-textconv", "--no-color", ...args, range]);
 	const prompt = classifyPrompt(change, { sha: baseSha, text }, diff(["--stat=160"]), diff(["--patch"]));
-	const schemaFile = saveSchema(input.dir, ASSESSMENT);
-	// Every classifier sets the same tier from the same prompt, so one that is logged out, has its login rejected, or
-	// hit its usage limit passes the turn to the next.
+	const answer = await ask(CLASSIFIERS, {
+		cwd: root,
+		dir: input.dir,
+		env: input.env,
+		signal: input.signal,
+		instructions: CLASSIFY_INSTRUCTIONS,
+		schema: ASSESSMENT,
+		prompt,
+		who: "classifier",
+		task: "set the risk tier",
+		parse: (value) => assessment(value, "the classifier's reply"),
+	});
+	const { tier, reason } = answer.value;
+	return {
+		key,
+		value: {
+			tier,
+			reason,
+			by: { kind: "model", ...answer.entry, session: answer.session },
+			usage: answer.usage ? [{ turn: "classify", ...answer.usage }] : [],
+		},
+	};
+}
+
+/** A one-turn question to a model in a new session, answered in `schema`. */
+export interface Question<T = unknown> {
+	/** Where its CLI runs, and where the schema file is saved. */
+	cwd: string;
+	dir: string;
+	env: NodeJS.ProcessEnv;
+	signal?: AbortSignal;
+	instructions: string;
+	schema: object;
+	prompt: string;
+	/** The tools Claude may call; a reviewer's by default. */
+	tools?: string;
+	/** Who answers and what for, as `classifier` and `set the risk tier`, for errors. */
+	who: string;
+	task: string;
+	/** The reply's value, throwing when it is unusable, which passes the question to the next model. */
+	parse(value: unknown): T;
+}
+
+/**
+ * A question's answer: the model that gave it, its session, the parsed reply, and the tokens it reported, with every
+ * turn that replied, unusable ones first, so a caller can count what the question cost.
+ */
+export interface Answer<T = unknown> {
+	entry: Model;
+	session: string;
+	value: T;
+	usage: Omit<Usage, "turn"> | null;
+	spent: { entry: Model; usage: Omit<Usage, "turn"> | null }[];
+}
+
+/**
+ * Ask the first of `entries` that can run: one that is logged out, has its login rejected, or hit its usage limit
+ * passes the question to the next, since each answers the same prompt.
+ */
+export async function ask<T>(entries: readonly Model[], question: Question<T>): Promise<Answer<T>> {
+	const schemaFile = saveSchema(question.dir, question.schema);
 	const failures: (ReviewInputError | ReviewLimitError)[] = [];
-	for (const entry of CLASSIFIERS) {
+	const spent: Answer<T>["spent"] = [];
+	for (const entry of entries) {
 		let reply: Reply;
 		try {
-			const cli = await prepare(entry.harness, root, input.env, input.signal);
+			const cli = await prepare(entry.harness, question.cwd, question.env, question.signal);
 			const context: Context = {
-				mergeBase: change.mergeBase,
-				instructions: CLASSIFY_INSTRUCTIONS,
+				// A question reviews no range.
+				mergeBase: "",
+				instructions: question.instructions,
 				model: entry.model,
 				effort: entry.effort,
-				schema: ASSESSMENT,
+				schema: question.schema,
 				schemaFile,
+				...(question.tools !== undefined && { tools: question.tools }),
 				...(cli.env.OPENAI_BASE_URL && { openaiBaseUrl: cli.env.OPENAI_BASE_URL }),
 			};
-			reply = await turn(cli, cli.reviewer.ask(context, randomUUID(), prompt), root, entry.model);
+			reply = await turn(
+				cli,
+				cli.reviewer.ask(context, randomUUID(), question.prompt),
+				question.cwd,
+				entry.model,
+			);
 		} catch (error) {
 			if (!(error instanceof ReviewInputError || error instanceof ReviewLimitError)) throw error;
 			failures.push(error);
 			continue;
 		}
-		if (reply.session === undefined) throw new Error(`${entry.harness} did not report the classifier's session`);
-		const { tier, reason } = assessment(replied(reply, "the classifier's reply"), "the classifier's reply");
-		return {
-			key,
-			value: {
-				tier,
-				reason,
-				by: { kind: "model", ...entry, session: reply.session },
-				usage: reported(reply.usage) ? [{ turn: "classify", ...reply.usage }] : [],
-			},
-		};
+		const usage = reported(reply.usage) ? reply.usage : null;
+		spent.push({ entry, usage });
+		// A model that answered with no session, or unusably, passes the question on like one that could not run.
+		let value: T;
+		try {
+			if (reply.session === undefined) throw new Error(`it did not report the ${question.who}'s session`);
+			value = question.parse(replied(reply, `the ${question.who}'s reply`));
+		} catch (error) {
+			failures.push(new ReviewInputError(`${entry.harness} ${entry.model}: ${(error as Error).message}`));
+			continue;
+		}
+		return { entry, session: reply.session!, value, usage, spent };
 	}
-	throw unclassified(failures);
+	throw unanswered(failures, question, spent);
 }
 
 /**
- * Why no classifier set the tier: the usage limit that resets first when every one hit its own, so a caller waits
- * for the earliest, else each classifier's reason.
+ * Why no model answered: the usage limit that resets first when every one hit its own, so a caller waits for the
+ * earliest, else each model's reason.
  */
-function unclassified(failures: (ReviewInputError | ReviewLimitError)[]): Error {
+function unanswered(
+	failures: (ReviewInputError | ReviewLimitError)[],
+	{ who, task }: Question<unknown>,
+	spent: Answer<unknown>["spent"],
+): Error {
 	const limits = failures.filter((each) => each instanceof ReviewLimitError);
-	if (limits.length === failures.length)
+	// Every model at its limit replied to nothing, so nothing was spent.
+	if (limits.length > 0 && limits.length === failures.length)
 		return limits.sort((a, b) => (a.until ?? Infinity) - (b.until ?? Infinity))[0]!;
-	return new ReviewInputError(
-		`no classifier could set the risk tier: ${failures.map((each) => each.message).join("; ")}`,
-	);
+	return new UnansweredError(`no ${who} could ${task}: ${failures.map((each) => each.message).join("; ")}`, spent);
 }
 
 /**

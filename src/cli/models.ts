@@ -68,6 +68,22 @@ export const CLASSIFIERS: readonly Model[] = [
 ];
 
 /**
+ * The models that sort a finished session's time into categories, ranked as
+ * the classifiers are. Haiku is the cheapest, and each prompt stays below its
+ * 100k-token surcharge.
+ */
+export const SPLITTERS: readonly Model[] = [
+	{ harness: "claude", model: "claude-haiku-5-5", effort: "low" },
+	sol("low"),
+];
+
+/**
+ * The stronger models that sort a sample of the same steps again, so each
+ * split reports how often its classifier disagrees with a better judge.
+ */
+export const SPLIT_CHECKERS: readonly Model[] = [sonnet("medium"), sol("medium")];
+
+/**
  * The writer A/B: each armed size's quests split between its first writer
  * and an alternative where published results disagree, until the readout in
  * quest/m0/routing-evidence/README.md deletes it. L runs no arm.

@@ -128,7 +128,7 @@ if (argv.includes("--session-id") && argv.includes("--json-schema")) {
 		result({ session_id: at("--session-id"), is_error: true, result: "You've hit your weekly limit · resets Nov 5, 3pm (UTC)" });
 		process.exit(1);
 	}
-	const reply = ${RISK_REPLY};
+	const reply = failing.includes("claude-unusable") ? JSON.stringify({ tier: "huge", reason: "x" }) : ${RISK_REPLY};
 	result({
 		session_id: at("--session-id"),
 		result: reply,
@@ -213,7 +213,7 @@ if (argv[1] === "review") {
 		event({ type: "turn.failed", error: { message } });
 		process.exit(1);
 	}
-	message(${RISK_REPLY});
+	message(failing.includes("codex-unusable") ? "not JSON" : ${RISK_REPLY});
 	event({ type: "turn.completed", usage: { input_tokens: 40, cached_input_tokens: 0, output_tokens: 3 } });
 } else {
 	event({ type: "thread.started", thread_id: argv[argv.length - 2] });

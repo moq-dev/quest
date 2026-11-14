@@ -47,6 +47,61 @@ export interface ModelSpend {
 	complete: boolean;
 }
 
+/**
+ * Where a session's working time went, beyond its timed waits. The list is fixed so splits compare across weeks;
+ * change it only with a dated note here, since a change breaks the trend. `idle` is not classified: it is the time
+ * between turns, until the next message from a person or a notification. Settled 2026-11-13 from a sample of this
+ * host's Claude Code and Codex transcripts.
+ */
+export const SPLIT_CATEGORIES = [
+	"understanding",
+	"researching",
+	"writing",
+	"testing",
+	"environment",
+	"git",
+	"forge",
+	"reviewing",
+	"rework",
+	"coordinating",
+	"operating",
+	"reporting",
+	"circles",
+	"waiting",
+	"other",
+	"idle",
+] as const;
+export type SplitCategory = (typeof SPLIT_CATEGORIES)[number];
+
+/** One model's tokens in the turns that classified a session, as the CLI reported them. */
+export interface SplitUsage {
+	harness: string;
+	model: string;
+	effort: string;
+	input: number;
+	/** The part of `input` read from the prompt cache. */
+	cached: number;
+	output: number;
+}
+
+/**
+ * A session's time and tokens by category, as a cheap model sorted its steps. Its categories' time and its timed
+ * waits, without overlap, sum to its transcript's span; their tokens sum to its transcript's.
+ */
+export interface TimeSplit {
+	/** Every category, with its milliseconds and tokens. */
+	categories: Record<SplitCategory, { ms: number; tokens: number }>;
+	/** One line per classified part where something went wrong, naming no one and quoting no message. */
+	notes: string[];
+	/**
+	 * The time a stronger model sorted again, and the part of it the two sorted differently, or null when no part
+	 * was sampled.
+	 */
+	check: { ms: number; disagreed: number } | null;
+	/** What classifying it took, by model. */
+	usage: SplitUsage[];
+}
+
 /** One agent session, as `quest` sends it. */
 export interface SessionRecord {
 	/** `claude` or `codex`. */
@@ -78,6 +133,8 @@ export interface SessionRecord {
 	end: string;
 	/** Its timed waits, oldest first; null when they could not be read, as for a session on another host. */
 	waits: SessionWait[] | null;
+	/** Where the rest of its time went; null until every step is classified, and for a session on another host. */
+	split: TimeSplit | null;
 }
 
 /** The body of a record upload: sessions' records, and the breakages the uploading host knows of. */
@@ -118,6 +175,7 @@ export function parseRecord(value: unknown): SessionRecord {
 		"start",
 		"end",
 		"waits",
+		"split",
 	];
 	exact(value, keys, "the record");
 	const pulls = Array.isArray(value.pulls) ? value.pulls : fail("pulls");
@@ -168,11 +226,66 @@ export function parseRecord(value: unknown): SessionRecord {
 					fail(`a ${wait.kind} wait names what ended it`);
 				return wait;
 			}) ?? null,
+		split: value.split === null ? null : parseSplit(value.split),
 	};
 	if (new Set(record.pulls).size !== record.pulls.length) fail("a PR listed twice");
+	if (record.split !== null && record.waits === null) fail("a split without the waits it leaves out");
 	if (Date.parse(record.end) < Date.parse(record.start)) fail("it ends before it starts");
 	return record;
 }
+
+/** A split, failing on a missing or unknown category, a disagreement past what was checked, or a multi-line note. */
+function parseSplit(value: unknown): TimeSplit {
+	if (!isObject(value)) return fail("the split");
+	exact(value, ["categories", "notes", "check", "usage"], "the split");
+	const categories = isObject(value.categories) ? value.categories : fail("the split's categories");
+	exact(categories, [...SPLIT_CATEGORIES], "the split's categories");
+	const notes = Array.isArray(value.notes) ? value.notes : fail("the split's notes");
+	const usage = Array.isArray(value.usage) ? value.usage : fail("the split's usage");
+	let check: TimeSplit["check"] = null;
+	if (value.check !== null) {
+		if (!isObject(value.check)) return fail("the split's check");
+		exact(value.check, ["ms", "disagreed"], "the split's check");
+		check = {
+			ms: count(value.check.ms, "the checked time"),
+			disagreed: count(value.check.disagreed, "the disagreed time"),
+		};
+		if (check.disagreed > check.ms) fail("the check disagrees on more time than it checked");
+	}
+	return {
+		categories: Object.fromEntries(
+			SPLIT_CATEGORIES.map((name) => {
+				const each = categories[name];
+				if (!isObject(each)) return fail(`the split's ${name}`);
+				exact(each, ["ms", "tokens"], `the split's ${name}`);
+				return [name, { ms: count(each.ms, `${name}'s time`), tokens: count(each.tokens, `${name}'s tokens`) }];
+			}),
+		) as TimeSplit["categories"],
+		notes: notes.map((note) => {
+			const line = text(note, "a split note");
+			return /[\r\n]/.test(line) || line.length > NOTE_LIMIT ? fail("a split note is not one short line") : line;
+		}),
+		check,
+		usage: usage.map((u: unknown) => {
+			if (!isObject(u)) return fail("a split's usage");
+			exact(u, ["harness", "model", "effort", "input", "cached", "output"], "a split's usage");
+			const input = count(u.input, "a split's input tokens");
+			const cached = count(u.cached, "a split's cached tokens");
+			if (cached > input) fail("a split's cached tokens exceed its input");
+			return {
+				harness: text(u.harness, "a split's harness"),
+				model: text(u.model, "a split's model"),
+				effort: text(u.effort, "a split's effort"),
+				input,
+				cached,
+				output: count(u.output, "a split's output tokens"),
+			};
+		}),
+	};
+}
+
+/** The longest note a split keeps, in characters. */
+export const NOTE_LIMIT = 300;
 
 /**
  * An upload's body, failing whole on any malformed record, one naming no session, or a session or breakage sent
