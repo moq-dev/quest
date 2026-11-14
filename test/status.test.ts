@@ -282,6 +282,7 @@ test("reports checks by requiredness, each reviewer's latest review against the 
 		"merge-state blocked",
 		"review-decision review_required",
 		"review-record -",
+		"risk -",
 		"auto-merge -",
 		"merge-queue -",
 		"landing-stopped -",
@@ -342,13 +343,14 @@ test("a queued PR with auto-merge and no checks reports both, and JSON is determ
 		threads: page([]),
 	});
 	const status = await pullRequestStatus(pr, setup([body]).deps);
-	expect(statusLines(status).slice(2, 12)).toEqual([
+	expect(statusLines(status).slice(2, 13)).toEqual([
 		"draft true",
 		`head ${A}`,
 		"mergeable mergeable",
 		"merge-state blocked",
 		"review-decision -",
 		"review-record -",
+		"risk -",
 		"auto-merge squash kixelated 2026-10-07T12:00:00Z -",
 		"merge-queue awaiting_checks 2 2026-10-07T12:01:00Z",
 		"landing-stopped -",
@@ -1003,6 +1005,48 @@ describe("the review record", () => {
 
 	test("reads only the Review section, so a SHA elsewhere names no review", async () => {
 		expect(await line(`Fixes ${A}.\n\n## Review\n\nSkipped.\n\n## Models\n\n${C}`)).toBe("review-record -");
+	});
+});
+
+describe("the risk tier", () => {
+	const risk = async (body: string, options: Parameters<typeof setup>[1] = {}) => {
+		const fixture = setup([pull({ body, checks: null, reviews: page([]), threads: page([]) })], options);
+		const status = await pullRequestStatus(pr, fixture.deps);
+		return { line: statusLines(status).find((l) => l.startsWith("risk ")), risk: status.risk };
+	};
+	const record = (head: string, extra = "") =>
+		`## Review\n\n- Head: ${head}\n- Base: origin/main at bbbbbbbbbbbb\n- Risk: high, \`it rewrites the wire format\`\n` +
+		`- Classified: medium by Claude Code, claude-haiku-5-5, low effort, session \`s-1\`${extra}`;
+
+	test("names the record's tier, the classifier's, and whether it covers the head", async () => {
+		expect(await risk(record(A))).toEqual({
+			line: "risk high current medium it rewrites the wire format",
+			risk: { tier: "high", reason: "it rewrites the wire format", classified: "medium", state: "current" },
+		});
+		// A record with an open finding names its head by 12 characters, and no full SHA.
+		expect((await risk(record(A.slice(0, 12)))).line).toBe("risk high current medium it rewrites the wire format");
+		expect((await risk(record(B.slice(0, 12)))).line).toBe("risk high stale medium it rewrites the wire format");
+	});
+
+	test("carries to a later head as the review record does", async () => {
+		expect((await risk(record(B, `\n- Low findings fixed at ${A}`))).line).toMatch(/^risk high current /);
+		expect((await risk(record(B), { diffs: { [A]: "same", [B]: "same" } })).line).toMatch(
+			/^risk high diff-identical /,
+		);
+		expect((await risk(record(B), { diffs: { [A]: "new", [B]: "old" } })).line).toMatch(/^risk high stale /);
+	});
+
+	test("is absent from a record without one, and fails on a malformed one", async () => {
+		expect((await risk(`## Review\n\n- Head: ${A}`)).line).toBe("risk -");
+		const fixture = setup([
+			pull({
+				body: `## Review\n\n- Head: ${A}\n- Risk: dire`,
+				checks: null,
+				reviews: page([]),
+				threads: page([]),
+			}),
+		]);
+		await expect(pullRequestStatus(pr, fixture.deps)).rejects.toThrow("risk is malformed");
 	});
 });
 
