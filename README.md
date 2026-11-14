@@ -1566,7 +1566,8 @@ its fixes show without tokens.
 
 When an agent session's turn ends in a checkout that uses Quest, `quest`
 sends Kixel Code one record of it, rebuilt each time, so a resend replaces
-the last and the store follows the session as it grows. The type is
+the last and the store follows the session as it grows. The store keeps the
+copy that ends latest, since uploads of one session may arrive out of order. The type is
 `SessionRecord`, exported from `quest/core` with `parseRecord` and
 `parseUpload`, which refuse a malformed record whole:
 

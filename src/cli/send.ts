@@ -37,7 +37,7 @@ export interface Pending {
 	session: string;
 	/** Its transcript's first instant, epoch ms, so token-max reads all of it. */
 	start: number;
-	/** A fresh ID per enqueue, so a sender settles only the stop it sent, never one queued during its upload. */
+	/** A fresh ID per stop, naming its own queue file, so a sender removes only the stops it sent. */
 	queued: string;
 	/** The checkout's `origin` on GitHub, as `owner/repo`, and where its quest tree sits below the top level. */
 	origin: string;
@@ -193,21 +193,22 @@ export function queue(stopped: Stopped, env: NodeJS.ProcessEnv = process.env): Q
 		);
 	if (existsSync(refusal(env, endpoint, token))) return { notices, send: false };
 	const dir = join(stateDirectory(env), "pending");
-	const path = join(dir, `${digest(`${stopped.harness}\0${stopped.session}`)}.json`);
-	const earlier = existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")) as Pending) : null;
-	const start = earlier?.start ?? transcriptStart(stopped.transcript);
+	const start = transcriptStart(stopped.transcript);
 	if (start === null) throw new Error(`${stopped.transcript} records no instant, so its session cannot be read`);
+	const queued = randomUUID();
 	const pending: Pending = {
 		harness: stopped.harness,
 		session: stopped.session,
 		start,
-		queued: randomUUID(),
+		queued,
 		origin: repository,
 		prefix: run(["rev-parse", "--show-prefix"]).stdout.trim(),
 		endpoint,
 	};
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
-	// Written whole, then renamed, so the sender never reads half a file.
+	// Each stop gets a file of its own, never rewritten, so a sender removes only the stops it read. Written whole,
+	// then renamed, so the sender never reads half a file.
+	const path = join(dir, `${queued}.json`);
 	writeFileSync(`${path}.new`, JSON.stringify(pending));
 	renameSync(`${path}.new`, path);
 	return { notices, send: true };
@@ -325,48 +326,29 @@ export async function sendQueued(deps: SendDependencies): Promise<Sent[] | null>
 
 /**
  * Take the lock file, or take it over from a sender that died; false while a live one holds it. The lock appears
- * whole, linked from a file already naming this process, so no reader sees it empty, and a dead owner's lock is moved
- * aside before it is removed, so two senders reclaiming at once never remove each other's new lock.
+ * whole, linked from a file already naming this process, so no reader sees it empty. Two senders reclaiming the same
+ * dead lock can both run; that only repeats work, since the store keeps the copy of a session that ends latest.
  */
 function acquire(lock: string): boolean {
 	const mine = `${lock}.${process.pid}`;
-	const aside = `${lock}.stale.${process.pid}`;
 	writeFileSync(mine, String(process.pid), { mode: 0o600 });
-	const read = (path: string) => {
-		try {
-			return readFileSync(path, "utf8");
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-			throw error;
-		}
-	};
 	try {
-		for (let tries = 0; tries < 3; tries++) {
+		for (let tries = 0; tries < 2; tries++) {
 			try {
 				linkSync(mine, lock);
 				return true;
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 			}
-			const owner = read(lock);
-			if (owner === null) continue;
-			const pid = Number(owner);
-			if (Number.isSafeInteger(pid) && pid > 0 && alive(pid)) return false;
+			let owner: number;
 			try {
-				renameSync(lock, aside);
+				owner = Number(readFileSync(lock, "utf8"));
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
 				throw error;
 			}
-			// Another sender took the lock between the read and the move: put it back and leave it the queue.
-			if (read(aside) !== owner) {
-				try {
-					linkSync(aside, lock);
-				} catch {}
-				rmSync(aside, { force: true });
-				return false;
-			}
-			rmSync(aside, { force: true });
+			if (Number.isSafeInteger(owner) && owner > 0 && alive(owner)) return false;
+			rmSync(lock, { force: true });
 		}
 		return false;
 	} finally {
@@ -388,8 +370,7 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 		.filter((name) => name.endsWith(".json"))
 		.map((name) => {
 			const path = join(dir, "pending", name);
-			const text = readFileSync(path, "utf8");
-			return { path, text, pending: JSON.parse(text) as Pending };
+			return { path, pending: JSON.parse(readFileSync(path, "utf8")) as Pending };
 		});
 	if (queued.length === 0) return [];
 	const since = Math.min(...queued.map((q) => q.pending.start));
@@ -483,13 +464,9 @@ async function sendOnce(deps: SendDependencies, dir: string): Promise<Sent[]> {
 	return sent;
 }
 
-/** Drop a queued session unless the hook queued it again since it was read. */
-function settle(q: { path: string; text: string }): void {
-	try {
-		if (readFileSync(q.path, "utf8") === q.text) rmSync(q.path, { force: true });
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-	}
+/** Drop a stop the sender read; a later stop of the same session has a file of its own and stays queued. */
+function settle(q: { path: string }): void {
+	rmSync(q.path, { force: true });
 }
 
 /** Lower this process's priority, as a background sender should run. */

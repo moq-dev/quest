@@ -24,6 +24,7 @@ user's token as a bearer token, and takes a 401 or 403 as no access.
 ## Waiting
 
 - kixel-ai/kixel.quest: its record store serves an endpoint that stores
-  `quest`'s upload with `parseUpload` and refuses a token it did not issue
+  `quest`'s upload with `parseUpload`, keeps each session's copy that ends
+  latest (two senders on a host may rarely overlap), refuses a token it did not issue
   with 401 or 403, and it says how a person gets a token; check that its
   `quest/m0/records.md` is gone from its tree
