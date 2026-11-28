@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 
 import { afterEach, beforeEach } from "vitest";
 
-/** The CPU one test may spend, five times the most any test spent on Linux (1.9 s, 2026-11-11). */
+/** The CPU one test may spend, five times the 2 s a test should stay under (the heaviest: 3.6 s on Linux, 2026-11-28). */
 const CPU_BUDGET_MS = 10_000;
 
 /**

@@ -1,8 +1,11 @@
 // A real repository's history, as the core's base-merge check reads it and as GitHub's REST API serves it.
-import { execFileSync, spawnSync } from "node:child_process";
+import { type ChildProcessByStdio, execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
+
+import { afterEach } from "vitest";
 
 import type { History, TreeEntry } from "../src/core";
 import { tempDir } from "./fixture";
@@ -47,28 +50,126 @@ export function commit(dir: string, files: Record<string, string | Uint8Array | 
 	return git(dir, "rev-parse", "HEAD");
 }
 
-/** `dir`'s history, with `base` as the PR's base branch. */
+/** One `git cat-file --batch` answering reads of a repository's objects in order. */
+class Objects {
+	readonly #child: ChildProcessByStdio<Writable, Readable, null>;
+	readonly #waiting: {
+		oid: string;
+		type: string;
+		resolve: (object: { oid: string; body: Buffer }) => void;
+		reject: (error: Error) => void;
+	}[] = [];
+	readonly #exited: Promise<void>;
+	#buffer = Buffer.alloc(0);
+	#failed: Error | undefined;
+
+	constructor(dir: string) {
+		this.#child = spawn("git", ["-C", dir, "cat-file", "--batch"], { stdio: ["pipe", "pipe", "inherit"] });
+		this.#child.stdout.on("data", (chunk: Buffer) => {
+			this.#buffer = Buffer.concat([this.#buffer, chunk]);
+			this.#drain();
+		});
+		this.#exited = new Promise((resolve) => {
+			const fail = (error: Error) => {
+				this.#failed ??= error;
+				for (const read of this.#waiting.splice(0)) read.reject(this.#failed);
+				resolve();
+			};
+			this.#child.on("error", fail);
+			this.#child.stdin.on("error", fail);
+			this.#child.on("close", (code) => fail(new Error(`git cat-file --batch exited with ${code}`)));
+		});
+	}
+
+	/** Object `oid`'s full id and body; it must be a `type`. */
+	read(oid: string, type: string): Promise<{ oid: string; body: Buffer }> {
+		return new Promise((resolve, reject) => {
+			if (this.#failed !== undefined) return reject(this.#failed);
+			this.#waiting.push({ oid, type, resolve, reject });
+			this.#child.stdin.write(`${oid}\n`);
+		});
+	}
+
+	/** Ends the process and waits for it, so the test's CPU budget counts it. */
+	close(): Promise<void> {
+		this.#child.stdin.end();
+		return this.#exited;
+	}
+
+	#drain() {
+		while (this.#waiting.length > 0) {
+			const eol = this.#buffer.indexOf(10);
+			if (eol < 0) return;
+			// `<oid> <type> <size>`, the body, and a newline; or `<name> missing` or `<name> ambiguous`.
+			const header = this.#buffer.toString("latin1", 0, eol);
+			const [id, type, size] = header.split(" ") as [string, string?, string?];
+			const end = eol + 1 + Number(size);
+			if (size !== undefined && this.#buffer.length < end + 1) return;
+			const read = this.#waiting.shift()!;
+			if (size === undefined || type !== read.type) {
+				this.#buffer = this.#buffer.subarray(size === undefined ? eol + 1 : end + 1);
+				read.reject(new Error(`${read.oid} is not a ${read.type}: ${header}`));
+				continue;
+			}
+			read.resolve({ oid: id, body: this.#buffer.subarray(eol + 1, end) });
+			this.#buffer = this.#buffer.subarray(end + 1);
+		}
+	}
+}
+
+const readers = new Map<string, Objects>();
+
+// Registered after the fixture's and the budget's hooks, so it runs before them (Vitest runs after-hooks as a
+// stack): each reader exits before its repository is removed and is reaped before the budget samples the CPU.
+afterEach(async () => {
+	const open = [...readers.values()];
+	readers.clear();
+	await Promise.all(open.map((reader) => reader.close()));
+});
+
+/** `dir`'s object reader, started once per test and closed when the test ends. */
+function objects(dir: string): Objects {
+	let reader = readers.get(dir);
+	if (reader === undefined) {
+		reader = new Objects(dir);
+		readers.set(dir, reader);
+	}
+	return reader;
+}
+
+/** `dir`'s history, with `base` as the PR's base branch; its reads end with the test. */
 export function gitHistory(dir: string, base = "main"): History {
+	const reader = objects(dir);
 	return {
 		async commit(sha) {
-			const [, ...parents] = git(dir, "rev-list", "--parents", "-n", "1", sha).split(" ");
-			return { tree: git(dir, "rev-parse", `${sha}^{tree}`), parents };
+			const body = (await reader.read(sha, "commit")).body.toString("utf8");
+			const headers = body.slice(0, body.indexOf("\n\n")).split("\n");
+			const field = (name: string) =>
+				headers.filter((line) => line.startsWith(`${name} `)).map((line) => line.slice(name.length + 1));
+			return { tree: field("tree")[0]!, parents: field("parent") };
 		},
 		async tree(oid) {
-			const out = execFileSync("git", ["-C", dir, "ls-tree", "-z", oid], { encoding: "utf8" });
-			return new Map(
-				out
-					.split("\0")
-					.filter(Boolean)
-					.map((line): [string, TreeEntry] => {
-						const [info, name] = line.split("\t") as [string, string];
-						const [mode, type, sha] = info.split(" ") as [string, TreeEntry["type"], string];
-						return [name, { mode, type, oid: sha }];
-					}),
-			);
+			// Each entry is `<mode> <name>\0` and a binary id as wide as the tree's own (SHA-1 or SHA-256); git
+			// stores a directory's mode without its leading zero.
+			const { oid: id, body } = await reader.read(oid, "tree");
+			const width = id.length / 2;
+			const entries = new Map<string, TreeEntry>();
+			for (let at = 0; at < body.length;) {
+				const space = body.indexOf(32, at);
+				const nul = body.indexOf(0, space);
+				const mode = body.toString("latin1", at, space).padStart(6, "0");
+				const type = mode === "040000" ? "tree" : mode === "160000" ? "commit" : "blob";
+				entries.set(body.toString("utf8", space + 1, nul), {
+					mode,
+					type,
+					oid: body.toString("hex", nul + 1, nul + 1 + width),
+				});
+				at = nul + 1 + width;
+			}
+			return entries;
 		},
 		async blob(oid) {
-			return new Uint8Array(execFileSync("git", ["-C", dir, "cat-file", "blob", oid]));
+			return new Uint8Array((await reader.read(oid, "blob")).body);
 		},
 		async mergeBase(a, b) {
 			const bases = git(dir, "merge-base", "--all", a, b).split("\n").filter(Boolean);

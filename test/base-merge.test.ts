@@ -1,6 +1,6 @@
 // The core's check that a head only merged the base since a review, against real merges and git's own.
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, test } from "vitest";
@@ -412,40 +412,64 @@ function edit(next: (n: number) => number, base: Record<string, string | null>):
 	return out;
 }
 
-/** A commit of `files`, with `exec` executable, on `parents`, written without a work tree. */
-function write(dir: string, files: Record<string, string | null>, exec: Set<string>, parents: string[]): string {
-	const blob = (text: string) =>
-		execFileSync("git", ["-C", dir, "hash-object", "-w", "--stdin"], { input: text, encoding: "utf8" }).trim();
-	const mktree = (entries: string[]) =>
-		execFileSync("git", ["-C", dir, "mktree", "-z"], {
-			input: entries.map((e) => `${e}\0`).join(""),
-			encoding: "utf8",
-		}).trim();
-	const entry = (path: string, name: string) =>
-		`${exec.has(path) ? "100755" : "100644"} blob ${blob(files[path]!)}\t${name}`;
+/** Files, null for an absent one, and the paths among them that are executable. */
+type Snapshot = { files: Record<string, string | null>; exec: Set<string> };
+
+/** One `git fast-import` stream's commit of `snapshot` on the commits marked `parents`, marked `mark`. */
+function fastImport(mark: number, { files, exec }: Snapshot, parents: number[]): string {
 	const present = PATHS.filter((path) => files[path] != null);
-	const inner = present.filter((path) => path.startsWith("d/"));
-	const root = present.filter((path) => !path.startsWith("d/")).map((path) => entry(path, path));
-	if (inner.length > 0) root.push(`040000 tree ${mktree(inner.map((path) => entry(path, path.slice(2))))}\td`);
-	return commitTree(dir, mktree(root), parents);
+	return [
+		"commit refs/heads/main",
+		`mark :${mark}`,
+		"committer Quest test <test@example.invalid> 0 +0000",
+		"data 6",
+		"commit",
+		...parents.map((parent, i) => `${i === 0 ? "from" : "merge"} :${parent}`),
+		"deleteall",
+		...present.flatMap((path) => [
+			`M ${exec.has(path) ? "100755" : "100644"} inline ${path}`,
+			`data ${Buffer.byteLength(files[path]!)}`,
+			files[path]!,
+		]),
+		"",
+	].join("\n");
 }
 
-function commitTree(dir: string, tree: string, parents: string[]): string {
-	return git(dir, "commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent]), "-m", "commit");
+/** Commits `root`, then `ours` and `theirs` on it, in one process, leaving `main` at `theirs`; their ids. */
+function write(dir: string, root: Snapshot, ours: Snapshot, theirs: Snapshot): [string, string, string] {
+	const marks = join(dir, ".git", "marks");
+	// The reset makes the root a root, whatever `main` held before.
+	const input = [
+		"reset refs/heads/main\n",
+		fastImport(1, root, []),
+		fastImport(2, ours, [1]),
+		fastImport(3, theirs, [1]),
+	];
+	execFileSync("git", ["-C", dir, "fast-import", "--quiet", "--force", `--export-marks=${marks}`], {
+		input: input.join(""),
+		stdio: ["pipe", "ignore", "inherit"],
+	});
+	const ids = new Map(
+		readFileSync(marks, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => line.split(" ") as [string, string]),
+	);
+	return [ids.get(":1")!, ids.get(":2")!, ids.get(":3")!];
 }
 
 test("judges a merge clean exactly when git merges its parents, without renames, into its tree", async () => {
 	let clean = 0;
 	let conflicted = 0;
+	// One repository for every history: objects are content-addressed, and `main` moves to each history's base side.
+	const dir = repository();
+	const objects = gitHistory(dir);
 	for (let seed = 1; seed <= 60; seed++) {
 		const next = random(seed);
-		const dir = repository();
 		const base = Object.fromEntries(PATHS.map((path) => [path, file(next)]));
-		const root = write(dir, base, new Set(), []);
 		const execs = () => new Set(PATHS.filter(() => next(6) === 0));
-		const ours = write(dir, edit(next, base), execs(), [root]);
-		const theirs = write(dir, edit(next, base), execs(), [root]);
-		git(dir, "branch", "-f", "main", theirs);
+		const side = (): Snapshot => ({ files: edit(next, base), exec: execs() });
+		const [, ours, theirs] = write(dir, { files: base, exec: new Set() }, side(), side());
 		const merged = spawnSync("git", ["-C", dir, "merge-tree", "--write-tree", "-X", "no-renames", ours, theirs], {
 			encoding: "utf8",
 		});
@@ -454,11 +478,15 @@ test("judges a merge clean exactly when git merges its parents, without renames,
 		if (merged.status === 0) clean++;
 		else conflicted++;
 		// Git's own merge, conflicted or not, and each parent's tree taken whole.
-		for (const candidate of [tree, `${ours}^{tree}`, `${theirs}^{tree}`]) {
-			const resolved = git(dir, "rev-parse", candidate);
-			const head = commitTree(dir, resolved, [ours, theirs]);
-			const expected = merged.status === 0 && resolved === tree;
-			expect(await new BaseMerges(gitHistory(dir), head).reaches(ours), `seed ${seed}, tree ${candidate}`).toBe(
+		const candidates = {
+			merge: tree,
+			ours: (await objects.commit(ours)).tree,
+			theirs: (await objects.commit(theirs)).tree,
+		};
+		for (const [name, candidate] of Object.entries(candidates)) {
+			const head = git(dir, "commit-tree", candidate, "-p", ours, "-p", theirs, "-m", "commit");
+			const expected = merged.status === 0 && candidate === tree;
+			expect(await new BaseMerges(gitHistory(dir), head).reaches(ours), `seed ${seed}, the ${name} tree`).toBe(
 				expected,
 			);
 		}
