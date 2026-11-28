@@ -741,7 +741,9 @@ the least, such as no review record counting from a server too old to say
 whether a maintainer attested it; a request with a field the server
 does not know is refused. A 400 with `{"error"}` refuses a bad argument, such as a
 malformed `--since`, which `quest` reports as a usage error. `quest/core` exports each read's types and their parsers;
-`quest/github`'s `GitHubForge` answers the same reads from GitHub, other than `updated` and `writers`.
+`quest/github`'s `GitHubForge` answers the same reads from GitHub, other than `updated` and `writers`, its `history` reads
+a repository's history for `quest/core`'s `BaseMerges`, and `reviewStatuses` with `countedReview` read the `quest review`
+status that counts for a head, each as `quest status` does.
 `quest review` posts each run to `POST /reviews` with the same token, its body
 `{"runs", "outcomes"}` as `parseReviews` in `quest/core` reads it.
 

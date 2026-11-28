@@ -1,12 +1,12 @@
 // A PR's repository history read from GitHub's REST API, for the core's check of base merges.
-import type { History, PullRequest, TreeEntry } from "../core";
+import type { History, Repository, TreeEntry } from "../core";
 import { type GitHubReader, array, object, repositoryPath, string } from "./client";
 
 const TYPES = ["blob", "tree", "commit"];
 
-/** `pr`'s repository as {@link History} reads it, with `pr.base` as the base branch. */
-export function history(github: GitHubReader, pr: PullRequest & { base: string }): History {
-	const path = repositoryPath(pr);
+/** `repository` as {@link History} reads it, with `repository.base` as the base branch. */
+export function history(github: GitHubReader, repository: Repository & { base: string }): History {
+	const path = repositoryPath(repository);
 	const get = async (route: string) => object(await (await github.request(`${path}${route}`)).json());
 	// `per_page=1` keeps the commits GitHub lists short; only the comparison's summary is read.
 	const compare = (from: string, to: string) => get(`/compare/${from}...${to}?per_page=1`);
@@ -52,7 +52,7 @@ export function history(github: GitHubReader, pr: PullRequest & { base: string }
 			return lacks === compared.behind_by ? base : null;
 		},
 		async onBase(sha) {
-			const status = (await compare(encodeURIComponent(pr.base), sha)).status;
+			const status = (await compare(encodeURIComponent(repository.base), sha)).status;
 			return status === "behind" || status === "identical";
 		},
 	};
