@@ -47,7 +47,7 @@ const user = (): NodeJS.ProcessEnv => {
 	};
 };
 
-test("an approved code stores a token named after the host, readable only by the user", async () => {
+test("an approved code stores a token named after the host", async () => {
 	const server = new FakeLogin();
 	const { deps, env, said, asked, clock } = host(server);
 	expect(await login(deps)).toEqual({
@@ -66,6 +66,12 @@ test("an approved code stores a token named after the host, readable only by the
 	expect(server.polls).toBe(3);
 	expect(clock()).toBe(15_000);
 	expect(tokenFor(KIXEL, env)).toBe("issued-1");
+});
+
+// Windows has no POSIX modes: a file reads as 0o666 whatever it was created with.
+test.skipIf(process.platform === "win32")("the token file is readable only by the user", async () => {
+	const { deps, env } = host(new FakeLogin());
+	await login(deps);
 	expect(statSync(tokensPath(env)).mode & 0o777).toBe(0o600);
 });
 

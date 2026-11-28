@@ -71,8 +71,13 @@ export function diskCache<T>(directory: string, parse: (value: unknown) => T | u
 			await mkdir(directory, { recursive: true, mode: 0o700 });
 			const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
 			await writeFile(temporary, text, { mode: 0o600 });
-			// Another process's eviction may take the file first; the entry is then just not kept.
-			await rename(temporary, file).catch(missing);
+			// Another process's eviction may take the file first, and on Windows a rename over an entry another
+			// writer or reader holds open fails with EPERM, EACCES, or EBUSY; the entry is then just not kept.
+			await rename(temporary, file).catch(async (error) => {
+				await unlink(temporary).catch(missing);
+				if (process.platform === "win32" && ["EPERM", "EACCES", "EBUSY"].includes(error?.code)) return;
+				missing(error);
+			});
 			written += size;
 			if (summed === undefined || summed + written > limit || written > limit / 8) await evict();
 		},

@@ -615,18 +615,26 @@ describe("worktrees", () => {
 		worktrees.configure(15_000_000);
 		const module = new URL("../src/cli/worktree.ts", import.meta.url).href;
 		const create = (repository: string, name: string) =>
-			new Promise<number | null>((resolve, reject) => {
+			new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
 				const source = `import { Worktrees } from ${JSON.stringify(module)}; await new Worktrees(${JSON.stringify(home)}).create(${JSON.stringify(repository)}, ${JSON.stringify(name)}, 10_000_000);`;
 				const child = spawn(
 					process.execPath,
 					["--experimental-strip-types", "--input-type=module", "-e", source],
-					{ stdio: "ignore" },
+					{ stdio: ["ignore", "ignore", "pipe"] },
 				);
+				let stderr = "";
+				child.stderr.on("data", (chunk) => (stderr += chunk));
 				child.on("error", reject);
-				child.on("exit", resolve);
+				child.on("close", (code) => resolve({ code, stderr }));
 			});
 		const results = await Promise.all([create(repo, "one"), create(second, "two")]);
-		expect(results.filter((result) => result === 0)).toHaveLength(1);
+		const failures = results.filter((result) => result.code !== 0);
+		expect(
+			results.filter((result) => result.code === 0),
+			results.map((result) => result.stderr).join("\n"),
+		).toHaveLength(1);
+		// The loser fails on the disk refusal, not on the registry lock or the filesystem.
+		expect(failures[0]!.stderr).toContain("disk capacity exceeded");
 		expect(worktrees.status().records).toHaveLength(1);
 		expect(worktrees.status().allocated).toBeLessThanOrEqual(15_000_000);
 	});

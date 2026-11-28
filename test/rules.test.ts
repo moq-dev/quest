@@ -20,6 +20,9 @@ beforeEach(() => {
 });
 const bash = (command: string) => broken({ tool: "Bash", input: { command }, cwd });
 
+/** A file in `cwd` as a shell word: the shell takes the backslashes of a Windows path as escapes. */
+const abs = (name: string) => join(cwd, name).replaceAll("\\", "/");
+
 test("parse splits commands and attaches redirections and here-documents", () => {
 	expect(
 		parse(
@@ -225,7 +228,7 @@ test("a body file is read only for a command alone on its line", () => {
 	writeFileSync(join(cwd, "sub", "dash.md"), `Body ${DASH}\n`);
 	expect(bash("gh pr comment 5 --body-file good.md")).toEqual([]);
 	expect(bash("gh pr comment 5 --body-file bare.md")).toEqual([RULES.footer]);
-	expect(bash(`gh pr comment 5 --body-file ${join(cwd, "bare.md")}`)).toEqual([RULES.footer]);
+	expect(bash(`gh pr comment 5 --body-file ${abs("bare.md")}`)).toEqual([RULES.footer]);
 	expect(bash("gh pr comment 5 -Fbare.md")).toEqual([RULES.footer]);
 	expect(bash("gh pr comment 5 --body-file - < bare.md")).toEqual([RULES.footer]);
 	expect(bash("gh api repos/o/r/issues/5/comments -F body=@bare.md")).toEqual([RULES.footer]);
@@ -278,14 +281,14 @@ test("a body file is read only for a command alone on its line", () => {
 	expect(bash("env --chdir=sub gh pr comment 5 --body-file bare.md")).toEqual([]);
 	expect(bash("env -C sub gh pr comment 5 --body-file bare.md")).toEqual([]);
 	expect(bash("env -C sub sh -c 'gh pr comment 5 --body-file bare.md'")).toEqual([]);
-	expect(bash(`env -C sub gh pr comment 5 --body-file ${join(cwd, "bare.md")}`)).toEqual([RULES.footer]);
+	expect(bash(`env -C sub gh pr comment 5 --body-file ${abs("bare.md")}`)).toEqual([RULES.footer]);
 	expect(bash("env -C sub gh pr comment 5 --body nothing")).toEqual([RULES.footer]);
 	expect(bash("env -u X gh pr comment 5 --body-file bare.md")).toEqual([RULES.footer]);
 
 	// `git -C` reads a relative message file from the directory it names; stdin stays the line's.
 	expect(bash("git -C sub commit -F dash.md")).toEqual([]);
 	expect(bash("git -Csub commit -F dash.md")).toEqual([]);
-	expect(bash(`git -C sub commit -F ${join(cwd, "dash.md")}`)).toEqual([RULES.emDash]);
+	expect(bash(`git -C sub commit -F ${abs("dash.md")}`)).toEqual([RULES.emDash]);
 	expect(bash(`git -C sub commit -F - <<'EOF'\nfix: a ${DASH} b\nEOF`)).toEqual([RULES.emDash]);
 });
 

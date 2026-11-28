@@ -74,6 +74,9 @@ const GiB = 2 ** 30;
 /** How this process's gate records itself in an admission. */
 const me = { pid: process.pid, start: processStart(process.pid) };
 
+/** What a ledger file keeps of `me`: JSON drops a start that Windows cannot read. */
+const recorded = Object.fromEntries(Object.entries(me).filter(([, value]) => value !== undefined));
+
 afterEach(() => vi.unstubAllEnvs());
 
 test("limits derive from the host's CPUs and memory", () => {
@@ -603,7 +606,11 @@ test("a place frees once its gate ends or its caller cancels, or a minute after 
 	const controller = new AbortController();
 	const waited: string[] = [];
 	queued.sleep = async () => {
-		expect(queued.ledger().admissions).toEqual([build, fresh, expect.objectContaining({ queued: true, ...me })]);
+		expect(queued.ledger().admissions).toEqual([
+			build,
+			fresh,
+			expect.objectContaining({ queued: true, ...recorded }),
+		]);
 		controller.abort(new Error("cancelled"));
 	};
 	await expect(admit(limits, queued, controller.signal, (reason) => waited.push(reason))).rejects.toThrow(

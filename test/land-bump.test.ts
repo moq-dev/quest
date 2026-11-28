@@ -551,24 +551,28 @@ describe("bumpPass", () => {
 		expect(landed).not.toHaveBeenCalled();
 	});
 
-	test("refuses a target whose tree has a symlink out of the checkout", async () => {
-		const target = world();
-		const work = tempDir();
-		git(work, "clone", "--quiet", bare(target), ".");
-		configure(work, GIT_SETTINGS);
-		// The checkout's parent, the daemon's own directory, exists; the dangling link would be created on write.
-		symlinkSync("..", join(work, "AGENTS.md"));
-		symlinkSync("../../nothing", join(work, "CLAUDE.md"));
-		symlinkSync("flake.nix", join(work, "inside"));
-		git(work, "add", ".");
-		git(work, "commit", "--quiet", "-m", "link");
-		git(work, "push", "--quiet", "origin", "HEAD:main");
-		target.base = git(work, "rev-parse", "HEAD");
-		await expect(bumpPass(context(target), release(NEW))).rejects.toThrow(
-			"AGENTS.md is a symlink out of the repository",
-		);
-		expect(target.pulls).toEqual([]);
-	});
+	// Git for Windows checks a symlink out as a plain file unless the user may create links.
+	test.skipIf(process.platform === "win32")(
+		"refuses a target whose tree has a symlink out of the checkout",
+		async () => {
+			const target = world();
+			const work = tempDir();
+			git(work, "clone", "--quiet", bare(target), ".");
+			configure(work, GIT_SETTINGS);
+			// The checkout's parent, the daemon's own directory, exists; the dangling link would be created on write.
+			symlinkSync("..", join(work, "AGENTS.md"));
+			symlinkSync("../../nothing", join(work, "CLAUDE.md"));
+			symlinkSync("flake.nix", join(work, "inside"));
+			git(work, "add", ".");
+			git(work, "commit", "--quiet", "-m", "link");
+			git(work, "push", "--quiet", "origin", "HEAD:main");
+			target.base = git(work, "rev-parse", "HEAD");
+			await expect(bumpPass(context(target), release(NEW))).rejects.toThrow(
+				"AGENTS.md is a symlink out of the repository",
+			);
+			expect(target.pulls).toEqual([]);
+		},
+	);
 
 	// Git for Windows refuses a path with a control character.
 	test.skipIf(process.platform === "win32")("refuses an escaping symlink whose name holds a tab", async () => {

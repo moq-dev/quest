@@ -22,7 +22,7 @@ import {
 	writeSync,
 } from "node:fs";
 import { availableParallelism, constants, cpus, hostname, loadavg, totalmem, userInfo } from "node:os";
-import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 import { type Cancellation, cancelled, follow, forwards, GROUP, interrupts, received, requested } from "./interrupt";
@@ -438,7 +438,7 @@ function parse(text: string): Admission[] {
 				(entry.group === undefined ||
 					(typeof entry.group === "string" &&
 						entry.group.startsWith("/sys/fs/cgroup/") &&
-						normalize(entry.group) === entry.group &&
+						posix.normalize(entry.group) === entry.group &&
 						/\/quest-gate-[\w-]+\.scope$/.test(entry.group))),
 		);
 	return valid ? (value as Admission[]) : [];

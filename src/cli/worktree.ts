@@ -392,12 +392,18 @@ function acquire(lock: string): string {
 	mkdirSync(staging, { mode: 0o700 });
 	try {
 		writeFileSync(join(staging, `${token}.json`), JSON.stringify(currentOwner()), { mode: 0o600 });
+		let released = 0;
 		for (;;) {
 			try {
 				renameSync(staging, lock);
 				return token;
 			} catch (error) {
-				if (!existsSync(lock)) throw error;
+				// A holder may release between the failed rename and this check, so try again; a rename that
+				// keeps failing with no lock in the way is a real error.
+				if (!existsSync(lock)) {
+					if (++released > 5) throw error;
+					continue;
+				}
 			}
 			let holders: string[];
 			try {
