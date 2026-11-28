@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { setTimeout as pause } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-import { beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import type { GitHubDependencies } from "../src/github/client";
 import { readRemote } from "../src/cli/land";
@@ -27,8 +27,11 @@ import {
 } from "../src/cli/land-watch-flaky";
 import { FLAKY_INPUT, type KnownFlaky } from "../src/cli/land-fix";
 import { configure, GIT_SETTINGS, initRepository, tempDir } from "./fixture";
+import { checkFixers, track } from "./fixers";
 
 const REPOSITORY = { owner: "upstream", repo: "project" };
+
+afterEach(checkFixers);
 const BASE = "b".repeat(40);
 /** The base the merge group was built on, which its branch names. */
 const BUILT = "c".repeat(40);
@@ -1261,7 +1264,7 @@ function fixer(): {
 	calls: () => string[];
 } {
 	const tools = tempDir();
-	const wrapper = join(tools, "wrapper");
+	const wrapper = track(join(tools, "wrapper"));
 	writeFileSync(
 		wrapper,
 		`#!/bin/sh

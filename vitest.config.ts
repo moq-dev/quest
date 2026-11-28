@@ -51,7 +51,7 @@ export default defineConfig({
 					// A test's CPU budget (test/budget.ts) bounds how slow it may be; this wall-clock
 					// limit only catches a test awaiting what never comes, so a loaded host never reaches it.
 					setupFiles: ["test/state.ts", "test/budget.ts"],
-					globalSetup: ["test/scopes.ts"],
+					globalSetup: ["test/scopes.ts", "test/fixers.ts"],
 					testTimeout: 5 * 60_000,
 					hookTimeout: 5 * 60_000,
 				}),
