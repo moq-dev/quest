@@ -78,6 +78,7 @@ Language and PR topic packs (`pr`, `rust`, `ts`, `uniffi`) load lazily via hooks
 - Never rebase or force-push, even a branch only you hold; merge the base instead, when the branch conflicts with it or a landing step refuses the head.
 - Put scratch files, such as PR bodies, logs, patches, helper scripts, and temporary clones, in the checkout's `.tmp/`, never `/tmp`, so they disappear with the worktree.
 - Stop a process you started by its PID or process group, never by name with `pkill` or `killall`: other agents share the host.
+- Never load the host's CPU to reproduce a flake, as with `stress-ng`, `stress`, or `yes > /dev/null`: other agents share it. Slow only the code under test instead, such as by pinning it to one core with `taskset` or injecting delays.
 - Where a repository's `.config/nextest.toml` kills hung tests (`terminate-after`), run Rust tests through its test recipe or `cargo nextest run`, not plain `cargo test`, which skips that config, so a hung test never ends and holds the host's test slots. `cargo test --doc` runs the doctests nextest cannot.
 - In a question dialog, end each option you recommend with `(Recommended)`, and recommend one in every question with two or more options.
 - On a repository Kixel Quest hosts, `gh` cannot reach its PRs: use `quest pr view`, `list`, `create`, `edit`, `comment`, and `resolve`, and `quest status`, `ready`, and `merge`.

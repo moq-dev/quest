@@ -3029,6 +3029,8 @@ as the reason:
 - a scratch file written under `/tmp`, outside the checkout, by a redirection,
   `tee`, `mkdir`, `mktemp`, `git clone` or `worktree add`, or a file edit;
 - killing processes by name with `pkill` or `killall`, which can hit sibling agents;
+- loading the CPU with `stress`, `stress-ng`, or `yes` writing to `/dev/null`,
+  which starves sibling agents;
 - `cargo test` or `mbx test`, other than `--doc` or `--no-run`, in a Cargo
   workspace whose `.config/nextest.toml` kills hung tests with
   `terminate-after`, since plain `cargo test` skips it, unless the command

@@ -322,6 +322,18 @@ test("pkill and killall are blocked, while --help and pid-based kill pass", () =
 	expect(bash("kill -TERM 12345")).toEqual([]);
 });
 
+test("stress-ng, stress, and yes into /dev/null are blocked, while help and yes into a pipe pass", () => {
+	expect(bash("stress-ng --cpu 64 --quiet &")).toEqual([RULES.load]);
+	expect(bash("/nix/store/abc-stress-ng-0.22.02/bin/stress-ng --cpu 4")).toEqual([RULES.load]);
+	expect(bash("quest gate stress --cpu 8")).toEqual([RULES.load]);
+	expect(bash("bash -c 'yes > /dev/null &'")).toEqual([RULES.load]);
+	expect(bash("for i in 1 2; do yes >/dev/null & done")).toEqual([RULES.load]);
+	expect(bash("yes &> /dev/null")).toEqual([RULES.load]);
+	expect(bash("stress-ng --help")).toEqual([]);
+	expect(bash("yes | sdkmanager --licenses")).toEqual([]);
+	expect(bash("yes 2>/dev/null | head -3")).toEqual([]);
+});
+
 test("plain cargo test is denied where the workspace's nextest kills hung tests", () => {
 	const DENIED = `${RULES.nextest} If the user asked for this in their own words, prefix the command with \`${USER_ASKED}\`.`;
 	const KILLS = '[profile.default]\nslow-timeout = { period = "30s", terminate-after = 2 }\n';

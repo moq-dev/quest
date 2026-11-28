@@ -27,6 +27,7 @@ export const RULES = {
 		"Never rebase or force-push, even a branch only you hold; merge the base instead, when the branch conflicts with it or a landing step refuses the head.",
 	tmp: "Put scratch files, such as PR bodies, logs, patches, helper scripts, and temporary clones, in the checkout's `.tmp/`, never `/tmp`, so they disappear with the worktree.",
 	pkill: "Stop a process you started by its PID or process group, never by name with `pkill` or `killall`: other agents share the host.",
+	load: "Never load the host's CPU to reproduce a flake, as with `stress-ng`, `stress`, or `yes > /dev/null`: other agents share it. Slow only the code under test instead, such as by pinning it to one core with `taskset` or injecting delays.",
 	nextest:
 		"Where a repository's `.config/nextest.toml` kills hung tests (`terminate-after`), run Rust tests through its test recipe or `cargo nextest run`, not plain `cargo test`, which skips that config, so a hung test never ends and holds the host's test slots. `cargo test --doc` runs the doctests nextest cannot.",
 	recommend:
@@ -469,6 +470,16 @@ function shell(
 		} else if (name === "mktemp") mktemp(args, env, check);
 		else if (["pkill", "killall"].includes(basename(name!))) {
 			if (!args.some((arg) => arg === "--help" || arg === "-h")) found.add("pkill");
+		} else if (["stress", "stress-ng"].includes(basename(name!))) {
+			if (!args.some((arg) => ["--help", "-h", "--version", "-V"].includes(arg))) found.add("load");
+		} else if (basename(name!) === "yes") {
+			// Piped into a command, `yes` answers its prompts; only output thrown away burns a core for nothing.
+			if (
+				simple.redirects.some(
+					({ op, fd, target }) => /^(>|>\||&>)$/.test(op) && (fd ?? 1) === 1 && target === "/dev/null",
+				)
+			)
+				found.add("load");
 		} else if (["cargo", "mbx"].includes(basename(name!))) {
 			const manifest = !elsewhere && !moved && !asked ? libtest(args) : null;
 			if (manifest !== null && nextestKills(check.cwd, manifest)) found.add("nextest");
